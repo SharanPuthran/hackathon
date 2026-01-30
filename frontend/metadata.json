@@ -1,0 +1,7 @@
+{
+  "name": "SkyMarshal - Agentic Disruption Management",
+  "description": "An intelligent, agentic AI interface for airline disruption recovery and orchestration.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
