@@ -1,0 +1,103 @@
+# SkyMarshal - Terraform Variables
+
+variable "aws_region" {
+  description = "AWS region for resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "environment" {
+  description = "Environment name (dev, staging, prod)"
+  type        = string
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "private_subnets" {
+  description = "Private subnet CIDR blocks"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+
+variable "public_subnets" {
+  description = "Public subnet CIDR blocks"
+  type        = list(string)
+  default     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+}
+
+variable "database_subnets" {
+  description = "Database subnet CIDR blocks"
+  type        = list(string)
+  default     = ["10.0.201.0/24", "10.0.202.0/24", "10.0.203.0/24"]
+}
+
+# RDS Variables
+variable "rds_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.r6g.xlarge"
+}
+
+variable "rds_allocated_storage" {
+  description = "RDS allocated storage in GB"
+  type        = number
+  default     = 500
+}
+
+variable "rds_multi_az" {
+  description = "Enable Multi-AZ for RDS"
+  type        = bool
+  default     = true
+}
+
+variable "rds_backup_retention" {
+  description = "RDS backup retention period in days"
+  type        = number
+  default     = 7
+}
+
+# OpenSearch Variables
+variable "opensearch_instance_type" {
+  description = "OpenSearch instance type"
+  type        = string
+  default     = "r6g.xlarge.search"
+}
+
+variable "opensearch_instance_count" {
+  description = "Number of OpenSearch instances"
+  type        = number
+  default     = 3
+}
+
+variable "opensearch_ebs_volume_size" {
+  description = "OpenSearch EBS volume size in GB"
+  type        = number
+  default     = 500
+}
+
+# Monitoring Variables
+variable "alarm_email" {
+  description = "Email address for CloudWatch alarms"
+  type        = string
+}
+
+# Tags
+variable "project_name" {
+  description = "Project name for tagging"
+  type        = string
+  default     = "SkyMarshal"
+}
+
+variable "cost_center" {
+  description = "Cost center for billing"
+  type        = string
+  default     = "Etihad-Innovation"
+}

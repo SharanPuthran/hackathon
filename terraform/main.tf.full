@@ -1,0 +1,253 @@
+# SkyMarshal - Main Terraform Configuration
+# AWS Bedrock Agents Infrastructure
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  backend "s3" {
+    bucket         = "skymarshal-terraform-state"
+    key            = "infrastructure/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "skymarshal-terraform-locks"
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = "SkyMarshal"
+      Environment = var.environment
+      ManagedBy   = "Terraform"
+      CostCenter  = "Etihad-Innovation"
+    }
+  }
+}
+
+# Data sources
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# VPC Module
+module "vpc" {
+  source = "./modules/vpc"
+
+  environment = var.environment
+  vpc_cidr    = var.vpc_cidr
+
+  azs             = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
+  private_subnets = var.private_subnets
+  public_subnets  = var.public_subnets
+  database_subnets = var.database_subnets
+}
+
+# RDS PostgreSQL Module
+module "rds" {
+  source = "./modules/rds"
+
+  environment          = var.environment
+  vpc_id              = module.vpc.vpc_id
+  database_subnets    = module.vpc.database_subnet_ids
+  allowed_cidr_blocks = module.vpc.private_subnet_cidrs
+
+  instance_class      = var.rds_instance_class
+  allocated_storage   = var.rds_allocated_storage
+  database_name       = "etihad_aviation"
+  master_username     = "skymarshal_admin"
+  multi_az           = var.rds_multi_az
+  backup_retention    = var.rds_backup_retention
+}
+
+# OpenSearch Module
+module "opensearch" {
+  source = "./modules/opensearch"
+
+  environment         = var.environment
+  vpc_id             = module.vpc.vpc_id
+  subnet_ids         = module.vpc.private_subnet_ids
+  allowed_cidr_blocks = module.vpc.private_subnet_cidrs
+
+  instance_type      = var.opensearch_instance_type
+  instance_count     = var.opensearch_instance_count
+  ebs_volume_size    = var.opensearch_ebs_volume_size
+}
+
+# S3 Buckets Module
+module "s3" {
+  source = "./modules/s3"
+
+  environment = var.environment
+
+  buckets = {
+    disruptions   = "skymarshal-${var.environment}-disruptions"
+    knowledge_base = "skymarshal-${var.environment}-knowledge-base"
+    agent_logs    = "skymarshal-${var.environment}-agent-logs"
+    decisions     = "skymarshal-${var.environment}-decisions"
+  }
+}
+
+# Lambda Functions Module
+module "lambda" {
+  source = "./modules/lambda"
+
+  environment = var.environment
+  vpc_id      = module.vpc.vpc_id
+  subnet_ids  = module.vpc.private_subnet_ids
+
+  rds_endpoint         = module.rds.endpoint
+  rds_credentials_arn  = module.rds.credentials_secret_arn
+  opensearch_endpoint  = module.opensearch.endpoint
+
+  functions = {
+    crew_ftl_check = {
+      handler     = "crew_ftl_check.handler"
+      runtime     = "python3.11"
+      timeout     = 60
+      memory_size = 512
+    }
+    mel_assessment = {
+      handler     = "mel_assessment.handler"
+      runtime     = "python3.11"
+      timeout     = 60
+      memory_size = 512
+    }
+    notam_check = {
+      handler     = "notam_check.handler"
+      runtime     = "python3.11"
+      timeout     = 60
+      memory_size = 512
+    }
+    cost_calculation = {
+      handler     = "cost_calculation.handler"
+      runtime     = "python3.11"
+      timeout     = 60
+      memory_size = 512
+    }
+    database_query = {
+      handler     = "database_query.handler"
+      runtime     = "python3.11"
+      timeout     = 60
+      memory_size = 1024
+    }
+  }
+}
+
+# Bedrock Agents Module
+module "bedrock_agents" {
+  source = "./modules/bedrock"
+
+  environment = var.environment
+
+  knowledge_base_bucket = module.s3.bucket_ids["knowledge_base"]
+  opensearch_endpoint   = module.opensearch.endpoint
+  opensearch_index_name = "skymarshal-kb-${var.environment}"
+
+  lambda_arns = module.lambda.function_arns
+
+  agents = {
+    orchestrator = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/orchestrator.txt")
+      action_groups = ["initiate_disruption", "coordinate_agents"]
+    }
+    crew_compliance = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/crew_compliance.txt")
+      action_groups = ["check_ftl_compliance"]
+    }
+    maintenance = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/maintenance.txt")
+      action_groups = ["assess_mel_deferral"]
+    }
+    regulatory = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/regulatory.txt")
+      action_groups = ["check_notams"]
+    }
+    network = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/network.txt")
+      action_groups = ["analyze_network"]
+    }
+    guest_experience = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/guest_experience.txt")
+      action_groups = ["assess_passenger_impact"]
+    }
+    cargo = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/cargo.txt")
+      action_groups = ["assess_cargo_impact"]
+    }
+    finance = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/finance.txt")
+      action_groups = ["calculate_costs"]
+    }
+    arbitrator = {
+      model_id = "us.amazon.nova-premier-v1:0"
+      instruction = file("${path.module}/prompts/arbitrator.txt")
+      action_groups = ["rank_scenarios"]
+    }
+  }
+}
+
+# API Gateway Module
+module "api_gateway" {
+  source = "./modules/api_gateway"
+
+  environment = var.environment
+
+  orchestrator_agent_id    = module.bedrock_agents.agent_ids["orchestrator"]
+  orchestrator_agent_alias = module.bedrock_agents.agent_aliases["orchestrator"]
+}
+
+# CloudWatch Module
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  environment = var.environment
+
+  rds_instance_id     = module.rds.instance_id
+  opensearch_domain   = module.opensearch.domain_name
+  lambda_function_names = keys(module.lambda.function_arns)
+
+  alarm_email = var.alarm_email
+}
+
+# Outputs
+output "rds_endpoint" {
+  description = "RDS PostgreSQL endpoint"
+  value       = module.rds.endpoint
+}
+
+output "opensearch_endpoint" {
+  description = "OpenSearch endpoint"
+  value       = module.opensearch.endpoint
+}
+
+output "api_gateway_url" {
+  description = "API Gateway URL"
+  value       = module.api_gateway.api_url
+}
+
+output "bedrock_agent_ids" {
+  description = "Bedrock Agent IDs"
+  value       = module.bedrock_agents.agent_ids
+  sensitive   = true
+}
+
+output "s3_bucket_names" {
+  description = "S3 bucket names"
+  value       = module.s3.bucket_names
+}

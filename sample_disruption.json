@@ -1,0 +1,48 @@
+{
+  "disruption_id": "DISR-2026-01-30-001",
+  "timestamp": "2026-01-30T11:00:00Z",
+  "disruption_type": "aircraft_technical_issue",
+  "severity": "high",
+  "flight": {
+    "flight_number": "EY123",
+    "aircraft_type": "A380",
+    "origin": {
+      "iata": "AUH",
+      "name": "Abu Dhabi International Airport"
+    },
+    "destination": {
+      "iata": "LHR",
+      "name": "London Heathrow Airport"
+    },
+    "scheduled_departure": "2026-01-30T14:00:00Z",
+    "scheduled_arrival": "2026-01-30T18:30:00Z"
+  },
+  "issue_details": {
+    "description": "Hydraulic system fault detected during pre-flight checks",
+    "mel_category": "Category B",
+    "estimated_delay_minutes": 180,
+    "requires_maintenance": true,
+    "requires_part_replacement": false
+  },
+  "impact": {
+    "passengers_affected": 615,
+    "vip_passengers": 12,
+    "connecting_passengers": 87,
+    "cargo_shipments": 15,
+    "special_cargo": ["Pharmaceuticals", "Perishables"],
+    "crew_affected": 18
+  },
+  "constraints": {
+    "maintenance_window_required_minutes": 120,
+    "crew_ftl_remaining_hours": 8.5,
+    "alternate_aircraft_available": true,
+    "lhr_curfew": "23:00:00Z",
+    "passenger_connection_buffer_minutes": 90
+  },
+  "business_context": {
+    "route_importance": "high",
+    "network_criticality": "hub-connector",
+    "revenue_at_risk_usd": 850000,
+    "compensation_liability_usd": 125000
+  }
+}

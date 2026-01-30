@@ -1,0 +1,13 @@
+[project]
+name = "agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "agentcore>=0.1.6",
+    "bedrock-agentcore-starter-toolkit>=0.2.8",
+    "boto3>=1.42.38",
+    "langchain>=1.2.7",
+    "langgraph>=1.0.7",
+]
