@@ -1,0 +1,470 @@
+# Implementation Plan: SkyMarshal Agent Rearchitecture
+
+## Overview
+
+This implementation plan rearchitects the SkyMarshal agents system from its current structure to a modular architecture based on bedrock-agentcore-starter-toolkit. The migration follows a staged approach with validation at each step: project initialization → core infrastructure → safety agents → business agents → orchestrator integration → documentation and deployment.
+
+## Tasks
+
+- [-] 1. Stage 1: Project Initialization
+  - [x] 1.1 Initialize new project structure using UV
+    - Create new directory `skymarshal_agents_new/`
+    - Navigate to `skymarshal_agents_new/skymarshal/` directory
+    - Run `uv init` to initialize project
+    - Verify pyproject.toml and uv.lock are created
+    - _Requirements: 1.1, 1.3, 1.5, 6.5_
+  - [x] 1.2 Configure project dependencies
+    - Use `uv add` to add dependencies with latest compatible versions (UV will discover versions automatically)
+    - Run `uv add bedrock-agentcore-starter-toolkit`
+    - Run `uv add bedrock-agentcore`
+    - Run `uv add langchain` (for tools)
+    - Run `uv add langgraph` (for orchestration)
+    - Run `uv add mcp`
+    - Run `uv add langchain-mcp-adapters`
+    - Run `uv add langchain_aws`
+    - Run `uv add python-dotenv`
+    - Run `uv add tiktoken`
+    - Run `uv add aws-opentelemetry-distro`
+    - Run `uv add --dev pytest`
+    - Run `uv add --dev pytest-asyncio`
+    - Run `uv add --dev hypothesis` (for property-based testing)
+    - Verify uv.lock is automatically updated with resolved versions
+    - _Requirements: 1.2, 3.7_
+  - [x] 1.3 Configure AgentCore agent (user-initiated)
+    - User will run `agentcore create` to initialize the agent in "skymarshal"
+    - User will provide agent name (Skymarshal_Agent) and configuration during creation
+    - After creation, any configuration changes should be made using `agentcore configure` CLI commands
+    - Do NOT manually edit .bedrock_agentcore.yaml directly
+    - Verify .bedrock_agentcore.yaml is created with proper structure
+    - _Requirements: 1.4, 9.1, 9.5_
+  - [x] 1.4 Create basic directory structure
+    - Create skymarshal_agents_new/skymarshal/src/ directory (main agent module)
+    - Create skymarshal_agents_new/skymarshal/src/agents/ directory
+    - Create skymarshal_agents_new/skymarshal/src/database/ directory
+    - Create skymarshal_agents_new/skymarshal/src/mcp_client/ directory
+    - Create skymarshal_agents_new/skymarshal/src/model/ directory
+    - Create skymarshal_agents_new/skymarshal/src/utils/ directory
+    - Add **init**.py files to each directory
+    - _Requirements: 2.1_
+  - [ ]\* 1.5 Validate Stage 1 with ruff
+    - Run `uv run ruff check .` on project from skymarshal/ directory
+    - Fix any linting errors
+    - Run `uv run ruff format .` to format code
+    - _Requirements: 4.3_
+
+- [x] 2. Stage 2: Core Infrastructure Migration
+  - [x] 2.1 Migrate database layer
+    - Copy database/dynamodb.py to src/database/dynamodb.py
+    - Copy database/tools.py to src/database/tools.py
+    - Update imports to use new structure
+    - Update **init**.py to export DynamoDBClient and tool factories
+    - Verify DynamoDBClient has query_table, get_item, scan_table methods
+    - Verify all 7 tool factory functions exist (get_crew_compliance_tools, get_maintenance_tools, get_regulatory_tools, get_network_tools, get_guest_experience_tools, get_cargo_tools, get_finance_tools)
+    - _Requirements: 3.2, 8.1, 8.2, 8.5_
+  - [x] 2.2 Migrate MCP client
+    - Copy mcp_client/client.py to src/mcp_client/client.py
+    - Update imports to use new structure
+    - Update **init**.py to export get_streamable_http_mcp_client
+    - Verify get_tools() method returns list of tools
+    - _Requirements: 3.3_
+  - [x] 2.3 Migrate model utilities
+    - Copy model/load.py to src/model/load.py
+    - Update imports to use new structure
+    - Update **init**.py to export load_model
+    - Verify load_model() returns Bedrock model instance
+    - _Requirements: 3.4_
+  - [x] 2.4 Migrate response utilities
+    - Copy utils/response.py to src/utils/response.py
+    - Update imports to use new structure
+    - Update **init**.py to export aggregate_agent_responses and determine_status
+    - Verify both functions have correct signatures
+    - _Requirements: 3.5_
+  - [x] 2.5 Validate core infrastructure against best practices
+    - Fetch official LangGraph documentation for tool integration patterns
+    - Fetch official AgentCore documentation for runtime configuration
+    - Review migrated code against Python best practices (type hints, docstrings, async/await)
+    - Review database tools.py against LangGraph tool creation patterns from official docs
+    - Review MCP client against AgentCore integration patterns from official docs
+    - Document findings with references to official documentation
+    - Apply improvements where safe (add type hints, improve docstrings, fix async patterns)
+    - Create validation report for Stage 2
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 2.6 Validate Stage 2 with ruff and imports
+    - Run `uv run ruff check src/` to lint migrated files
+    - Fix any linting errors
+    - Test imports: `uv run python3 -c "from database import DynamoDBClient"`
+    - Test imports: `uv run python3 -c "from mcp_client import get_streamable_http_mcp_client"`
+    - Test imports: `uv run python3 -c "from model import load_model"`
+    - Test imports: `uv run python3 -c "from utils import aggregate_agent_responses"`
+    - _Requirements: 4.3_
+
+- [x] 3. Checkpoint - Core Infrastructure Complete
+  - Ensure all core infrastructure imports work correctly
+  - Ensure all tests pass
+  - Ask the user if questions arise
+
+- [x] 4. Stage 3: Safety Agent Migration
+  - [x] 4.1 Migrate crew_compliance agent
+    - Create src/agents/crew_compliance/ directory
+    - Create src/agents/crew_compliance/**init**.py
+    - Copy agents/crew_compliance.py content to src/agents/crew_compliance/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure (database, mcp_client, model)
+    - Export analyze_crew_compliance from **init**.py
+    - Verify agent function signature: `async def analyze_crew_compliance(payload: dict, llm, mcp_tools: list) -> dict`
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 4.2 Validate crew_compliance agent against best practices
+    - Fetch official LangGraph documentation for agent creation patterns
+    - Fetch official AgentCore documentation for agent structure
+    - Review agent code against Python best practices (type hints, docstrings, async/await)
+    - Review agent code against LangGraph patterns (graph construction, tool usage) from official docs
+    - Review agent code against AgentCore patterns from official docs
+    - Document findings with references to official documentation
+    - Apply improvements where safe (add type hints, improve error handling, update patterns)
+    - Create validation report for crew_compliance agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 4.3 Write property test for crew_compliance import
+    - **Property 1: Module Import Integrity**
+    - **Validates: Requirements 2.2, 2.5**
+    - Create test file test_agent_imports.py
+    - Use hypothesis to test crew_compliance import
+    - Verify analyze_crew_compliance is callable
+    - Run test with 100+ iterations
+  - [x] 4.4 Migrate maintenance agent
+    - Create src/agents/maintenance/ directory
+    - Create src/agents/maintenance/**init**.py
+    - Copy agents/maintenance.py content to src/agents/maintenance/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_maintenance from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 4.5 Validate maintenance agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched for crew_compliance (reuse if applicable)
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for maintenance agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 4.6 Migrate regulatory agent
+    - Create src/agents/regulatory/ directory
+    - Create src/agents/regulatory/**init**.py
+    - Copy agents/regulatory.py content to src/agents/regulatory/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_regulatory from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 4.7 Validate regulatory agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched previously
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for regulatory agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 4.8 Validate Stage 3 with ruff
+    - Run `uv run ruff check src/agents/` on safety agents
+    - Fix any linting errors
+    - Test imports for all three safety agents
+    - _Requirements: 4.3_
+
+- [x] 5. Stage 4: Business Agent Migration
+  - [x] 5.1 Migrate network agent
+    - Create src/agents/network/ directory
+    - Create src/agents/network/**init**.py
+    - Copy agents/network.py content to src/agents/network/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_network from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 5.2 Validate network agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched previously
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for network agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 5.3 Migrate guest_experience agent
+    - Create src/agents/guest_experience/ directory
+    - Create src/agents/guest_experience/**init**.py
+    - Copy agents/guest_experience.py content to src/agents/guest_experience/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_guest_experience from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 5.4 Validate guest_experience agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched previously
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for guest_experience agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 5.5 Migrate cargo agent
+    - Create src/agents/cargo/ directory
+    - Create src/agents/cargo/**init**.py
+    - Copy agents/cargo.py content to src/agents/cargo/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_cargo from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 5.6 Validate cargo agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched previously
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for cargo agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 5.7 Migrate finance agent
+    - Create src/agents/finance/ directory
+    - Create src/agents/finance/**init**.py
+    - Copy agents/finance.py content to src/agents/finance/agent.py
+    - Preserve complete SYSTEM_PROMPT constant
+    - Update imports to use new structure
+    - Export analyze_finance from **init**.py
+    - Verify agent function signature matches pattern
+    - _Requirements: 2.1, 2.2, 2.5, 3.1, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - [x] 5.8 Validate finance agent against best practices
+    - Review agent code against Python, LangGraph, and AgentCore best practices
+    - Reference official documentation fetched previously
+    - Document findings with references to official documentation
+    - Apply improvements where safe
+    - Create validation report for finance agent
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [x] 5.9 Extend property test for all agents
+    - **Property 1: Module Import Integrity (extended)**
+    - **Validates: Requirements 2.2, 2.5**
+    - Update test_agent_imports.py to test all 7 agents
+    - Use hypothesis with sampled_from for all agent names
+    - Verify each agent's analyze function is callable
+    - Run test with 100+ iterations
+  - [x] 5.10 Validate Stage 4 with ruff
+    - Run `uv run ruff check src/agents/` on all agents
+    - Fix any linting errors
+    - Test imports for all four business agents
+    - _Requirements: 4.3_
+
+- [x] 6. Checkpoint - All Agents Migrated
+  - Ensure all 7 agent modules can be imported
+  - Ensure all tests pass
+  - Ask the user if questions arise
+
+- [x] 7. Stage 5: Orchestrator Integration
+  - [x] 7.1 Create agents module **init**.py
+    - Create src/agents/**init**.py
+    - Import all 7 agent analyze functions
+    - Export all functions in **all** list
+    - Verify imports work: `from agents import analyze_crew_compliance, ...`
+    - _Requirements: 2.2, 2.3, 2.4_
+  - [x] 7.2 Migrate orchestrator main.py
+    - Copy main.py to src/main.py
+    - Update imports to use new agent structure: `from agents import analyze_crew_compliance, ...`
+    - Update imports for database, mcp_client, model, utils
+    - Preserve BedrockAgentCoreApp initialization
+    - Preserve AGENT_REGISTRY with all 7 agents
+    - Preserve SAFETY_AGENTS list (3 agents)
+    - Preserve BUSINESS_AGENTS list (4 agents)
+    - Preserve run_agent_safely function with timeout and error handling
+    - Preserve analyze_all_agents function with two-phase execution
+    - Preserve invoke function with @app.entrypoint decorator
+    - Preserve parallel execution using asyncio.gather
+    - Preserve response aggregation logic
+    - _Requirements: 3.6, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 9.2, 9.3_
+  - [x] 7.3 Validate orchestrator against best practices
+    - Fetch official AgentCore documentation for entrypoint patterns
+    - Fetch official LangGraph documentation for multi-agent orchestration
+    - Review orchestrator code against Python best practices (type hints, docstrings, async/await)
+    - Review orchestrator code against AgentCore patterns (proper decorator usage, app initialization) from official docs
+    - Review orchestrator code against LangGraph patterns (if applicable) from official docs
+    - Document findings with references to official documentation
+    - Apply improvements where safe (add type hints, improve error handling, update patterns)
+    - Create validation report for orchestrator
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9_
+  - [ ]\* 7.4 Write unit tests for orchestrator components
+    - Test AGENT_REGISTRY contains all 7 agents
+    - Test SAFETY_AGENTS contains 3 agents
+    - Test BUSINESS_AGENTS contains 4 agents
+    - Test run_agent_safely handles timeouts
+    - Test run_agent_safely handles exceptions
+    - Test analyze_all_agents calls safety agents first
+    - Test analyze_all_agents calls business agents second
+    - Test invoke function routes to correct agent
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
+  - [ ]\* 7.5 Write property test for code quality
+    - **Property 2: Code Quality Compliance**
+    - **Validates: Requirements 4.3**
+    - Create test_code_quality.py
+    - Use subprocess to run `ruff check src/`
+    - Assert return code is 0 (no errors)
+    - Run test to verify all code passes linting
+  - [ ]\* 7.6 Write unit test for structural completeness
+    - **Property 3: Structural Completeness**
+    - **Validates: Requirements 2.1, 2.3, 3.1-3.6, 6.5, 9.1**
+    - Create test_structure.py
+    - Verify all 7 agent directories exist
+    - Verify database/ directory with dynamodb.py and tools.py
+    - Verify mcp_client/ directory with client.py
+    - Verify model/ directory with load.py
+    - Verify utils/ directory with response.py
+    - Verify main.py exists
+    - Verify pyproject.toml, uv.lock, .bedrock_agentcore.yaml exist
+  - [ ]\* 7.7 Validate Stage 5 with ruff and local testing
+    - Run `uv run ruff check src/` on entire codebase
+    - Fix any linting errors
+    - Test main.py imports: `uv run python3 -c "from main import app, invoke"`
+    - Run `uv run agentcore dev` to start development server
+    - Test local invocation with sample payload
+    - Verify agent responds correctly
+    - _Requirements: 4.3, 5.1, 5.2, 5.3, 5.4_
+
+- [x] 8. Checkpoint - Orchestrator Integration Complete
+  - Ensure orchestrator can route to all agents
+  - Ensure local testing works with agentcore dev mode
+  - Ensure all tests pass
+  - Ask the user if questions arise
+
+- [ ] 9. Stage 6: Testing and Validation
+  - [ ]\* 9.1 Write property test for agent response structure
+    - **Property 4: Agent Response Structure**
+    - **Validates: Requirements 5.4**
+    - Create test_agent_responses.py
+    - Use hypothesis to generate valid payloads
+    - For each agent, invoke with payload
+    - Verify response contains "agent", "category", "status"
+    - Verify response contains either "result" or "error"
+    - Run test with 100+ iterations
+  - [ ]\* 9.2 Write unit test for dependency compatibility
+    - **Property 5: Dependency Compatibility**
+    - **Validates: Requirements 1.2, 3.7**
+    - Create test_dependencies.py
+    - Parse pyproject.toml
+    - Verify bedrock-agentcore >= 1.0.3 present
+    - Verify langchain >= 1.0.3 present
+    - Verify langgraph >= 1.0.2 present
+    - Verify mcp >= 1.19.0 present
+  - [ ]\* 9.3 Write unit test for orchestrator components
+    - **Property 6: Orchestrator Component Preservation**
+    - **Validates: Requirements 7.1-7.6, 9.2, 9.3**
+    - Create test_orchestrator.py
+    - Import main module
+    - Verify AGENT_REGISTRY exists and has 7 entries
+    - Verify SAFETY_AGENTS exists and has 3 entries
+    - Verify BUSINESS_AGENTS exists and has 4 entries
+    - Verify analyze_all_agents function exists
+    - Verify run_agent_safely function exists with timeout parameter
+    - Verify invoke function has @app.entrypoint decorator
+  - [ ]\* 9.4 Write unit test for database integration
+    - **Property 7: Database Integration Preservation**
+    - **Validates: Requirements 8.1, 8.2, 8.3, 8.5**
+    - Create test_database.py
+    - Import database module
+    - Verify DynamoDBClient class exists
+    - Verify DynamoDBClient has query_table, get_item, scan_table methods
+    - Verify all 7 tool factory functions exist
+    - For each tool factory, verify it returns a list
+  - [ ]\* 9.5 Write unit test for AWS configuration
+    - **Property 8: AWS Configuration Completeness**
+    - **Validates: Requirements 9.5**
+    - Create test_aws_config.py
+    - Parse .bedrock_agentcore.yaml
+    - Verify execution_role_auto_create field exists
+    - Verify account field exists
+    - Verify region field exists
+    - Verify s3_auto_create field exists
+    - Verify network_configuration field exists
+    - Verify protocol_configuration field exists
+    - Verify observability field exists
+  - [ ]\* 9.6 Write unit test for best practices compliance
+    - **Property 11: Best Practices Compliance**
+    - **Validates: Requirements 13.1-13.9**
+    - Create test_best_practices.py
+    - For sample of Python files, verify type hints present on functions
+    - For sample of Python files, verify docstrings present
+    - For async functions, verify proper async/await usage
+    - Verify @app.entrypoint decorator used correctly in main.py
+    - Verify proper error handling patterns (specific exceptions, not bare except)
+  - [ ]\* 9.7 Write unit test for documentation source verification
+    - **Property 12: Documentation Source Verification**
+    - **Validates: Requirements 13.2, 13.3, 13.9**
+    - Create test_validation_reports.py
+    - Verify validation reports exist for each stage
+    - Verify each report contains "Documentation Sources Consulted" section
+    - Verify documentation URLs are from official sources (langchain-ai.github.io, AWS docs)
+    - Verify each report contains findings with references to official docs
+  - [ ]\* 9.8 Run full test suite
+    - Run `uv run pytest` to execute all tests
+    - Verify all unit tests pass
+    - Verify all property tests pass (100+ iterations each)
+    - Fix any failing tests
+    - Achieve >80% code coverage
+
+- [ ] 10. Stage 7: Documentation and Deployment
+  - [x] 10.1 Update README.md
+    - Document new project structure with directory tree
+    - Document module organization (agents as separate modules)
+    - Document UV workflow (uv sync, uv run, uvx)
+    - Document local testing with agentcore dev mode
+    - Document deployment process to AWS Bedrock AgentCore
+    - Include example commands for common tasks
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
+  - [ ]\* 10.2 Write unit test for documentation completeness
+    - **Property 9: Documentation Completeness**
+    - **Validates: Requirements 11.1-11.5**
+    - Create test_documentation.py
+    - Read README.md content
+    - Verify "Project Structure" section exists
+    - Verify "Module Organization" section exists
+    - Verify "UV Workflow" section exists
+    - Verify "Local Testing" section exists
+    - Verify "Deployment" section exists
+  - [ ]\* 10.3 Write unit test for agent system prompt preservation
+    - **Property 10: Agent System Prompt Preservation**
+    - **Validates: Requirements 12.1-12.5**
+    - Create test_system_prompts.py
+    - For each agent module, import and check SYSTEM_PROMPT constant exists
+    - Verify SYSTEM_PROMPT is a non-empty string
+    - Verify SYSTEM_PROMPT contains key regulatory terms (EASA, GCAA, etc.)
+    - Verify SYSTEM_PROMPT contains chain-of-thought instructions
+    - Verify SYSTEM_PROMPT contains example scenarios
+  - [x] 10.4 Test deployment to AgentCore
+    - Run `uv run agentcore deploy` to deploy agent
+    - Verify deployment succeeds
+    - Test deployed agent with sample invocation
+    - Verify agent responds correctly in deployed environment
+    - _Requirements: 9.4_
+  - [x] 10.5 Create migration summary document
+    - Document what was migrated
+    - Document any changes made during migration
+    - Document testing results
+    - Document deployment verification
+    - Include before/after structure comparison
+
+- [x] 11. Final Checkpoint - Rearchitecture Complete
+  - Ensure all tests pass (unit + property tests)
+  - Ensure code passes ruff linting with zero errors
+  - Ensure documentation is complete
+  - Ensure agent can be deployed to AgentCore
+  - Ensure local and deployed testing both work
+  - Ask the user if questions arise
+
+## Notes
+
+- **IMPORTANT: All file paths in migration tasks refer to `skymarshal/src/` within the skymarshal agent directory**
+- **The correct full path is: `skymarshal_agents_new/skymarshal/src/`**
+- **All UV commands should be run from the `skymarshal/` directory: `cd skymarshal_agents_new/skymarshal`**
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation at major milestones
+- Property tests validate universal correctness properties with 100+ iterations
+- Unit tests validate specific examples, edge cases, and integration points
+- Use `uv run` for all command execution (not `python` or `pip`)
+- Use `python3` as the runtime binary (not `python`)
+- Run ruff linting after each migration stage to catch errors early
+- Test locally with `uv run agentcore dev` after each stage (from skymarshal/ directory)
+- Preserve all system prompts exactly as they are (no modifications to agent reasoning logic)
+- Best practices validation is performed after migrating each component
+- Official documentation is fetched online during validation (LangGraph from langchain-ai.github.io, AgentCore from AWS docs)
+- Validation reports are created for each stage documenting findings and improvements
+- Improvements are applied where safe and beneficial without breaking functionality

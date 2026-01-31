@@ -1,0 +1,1309 @@
+{
+  "timestamp": "2026-01-31T13:06:58.884437",
+  "validation_metadata": {
+    "region": "us-east-1",
+    "tables_validated": [
+      "flights",
+      "bookings",
+      "CrewRoster",
+      "MaintenanceWorkOrders",
+      "CargoFlightAssignments",
+      "Baggage",
+      "GSI_VALIDATION",
+      "IAM"
+    ],
+    "validation_scope": [
+      "table_existence",
+      "gsi_configuration",
+      "required_attributes",
+      "foreign_key_relationships",
+      "data_type_consistency"
+    ]
+  },
+  "summary": {
+    "total_issues": 28,
+    "errors": 1,
+    "warnings": 23,
+    "info": 4,
+    "critical_issues": 1,
+    "unresolved_issues": 0,
+    "tables_with_issues": 8,
+    "unique_issue_types": 8
+  },
+  "statistics": {
+    "by_table": {
+      "flights": {
+        "total_issues": 4,
+        "errors": 0,
+        "warnings": 2,
+        "info": 2,
+        "issue_types": [
+          "gsi_query_success",
+          "gsi_not_active"
+        ]
+      },
+      "bookings": {
+        "total_issues": 2,
+        "errors": 0,
+        "warnings": 2,
+        "info": 0,
+        "issue_types": [
+          "gsi_not_active"
+        ]
+      },
+      "CrewRoster": {
+        "total_issues": 2,
+        "errors": 0,
+        "warnings": 2,
+        "info": 0,
+        "issue_types": [
+          "gsi_not_active"
+        ]
+      },
+      "MaintenanceWorkOrders": {
+        "total_issues": 2,
+        "errors": 0,
+        "warnings": 2,
+        "info": 0,
+        "issue_types": [
+          "gsi_not_active"
+        ]
+      },
+      "CargoFlightAssignments": {
+        "total_issues": 3,
+        "errors": 0,
+        "warnings": 3,
+        "info": 0,
+        "issue_types": [
+          "gsi_not_active",
+          "gsi_missing"
+        ]
+      },
+      "Baggage": {
+        "total_issues": 3,
+        "errors": 0,
+        "warnings": 3,
+        "info": 0,
+        "issue_types": [
+          "gsi_not_active",
+          "gsi_missing"
+        ]
+      },
+      "GSI_VALIDATION": {
+        "total_issues": 1,
+        "errors": 1,
+        "warnings": 0,
+        "info": 0,
+        "issue_types": [
+          "gsi_validation_incomplete"
+        ]
+      },
+      "IAM": {
+        "total_issues": 11,
+        "errors": 0,
+        "warnings": 9,
+        "info": 2,
+        "issue_types": [
+          "role_exists",
+          "dynamodb_permissions_ok",
+          "missing_table_access",
+          "agent_table_access_incomplete"
+        ]
+      }
+    },
+    "by_issue_type": {
+      "gsi_not_active": {
+        "count": 12,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 12,
+          "info": 0
+        },
+        "affected_tables": [
+          "CargoFlightAssignments",
+          "CrewRoster",
+          "flights",
+          "MaintenanceWorkOrders",
+          "bookings",
+          "Baggage"
+        ]
+      },
+      "gsi_query_success": {
+        "count": 2,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 2
+        },
+        "affected_tables": [
+          "flights"
+        ]
+      },
+      "gsi_missing": {
+        "count": 2,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 2,
+          "info": 0
+        },
+        "affected_tables": [
+          "CargoFlightAssignments",
+          "Baggage"
+        ]
+      },
+      "gsi_validation_incomplete": {
+        "count": 1,
+        "severity_breakdown": {
+          "errors": 1,
+          "warnings": 0,
+          "info": 0
+        },
+        "affected_tables": [
+          "GSI_VALIDATION"
+        ]
+      },
+      "role_exists": {
+        "count": 1,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 1
+        },
+        "affected_tables": [
+          "IAM"
+        ]
+      },
+      "dynamodb_permissions_ok": {
+        "count": 1,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 0,
+          "info": 1
+        },
+        "affected_tables": [
+          "IAM"
+        ]
+      },
+      "missing_table_access": {
+        "count": 1,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 1,
+          "info": 0
+        },
+        "affected_tables": [
+          "IAM"
+        ]
+      },
+      "agent_table_access_incomplete": {
+        "count": 8,
+        "severity_breakdown": {
+          "errors": 0,
+          "warnings": 8,
+          "info": 0
+        },
+        "affected_tables": [
+          "IAM"
+        ]
+      }
+    }
+  },
+  "issues": {
+    "all": [
+      {
+        "severity": "warning",
+        "table": "flights",
+        "issue_type": "gsi_not_active",
+        "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:49.414401"
+      },
+      {
+        "severity": "info",
+        "table": "flights",
+        "issue_type": "gsi_query_success",
+        "description": "GSI flight-number-date-index query successful - no table scan detected",
+        "record_id": null,
+        "fix_suggestion": null,
+        "timestamp": "2026-01-31T13:06:50.638144"
+      },
+      {
+        "severity": "warning",
+        "table": "bookings",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:51.028265"
+      },
+      {
+        "severity": "warning",
+        "table": "CrewRoster",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:51.634346"
+      },
+      {
+        "severity": "warning",
+        "table": "MaintenanceWorkOrders",
+        "issue_type": "gsi_not_active",
+        "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:52.223434"
+      },
+      {
+        "severity": "warning",
+        "table": "CargoFlightAssignments",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:52.813434"
+      },
+      {
+        "severity": "warning",
+        "table": "CargoFlightAssignments",
+        "issue_type": "gsi_missing",
+        "description": "GSI shipment-index not found on table CargoFlightAssignments",
+        "record_id": null,
+        "fix_suggestion": "Run scripts/create_gsis.py to add shipment-index",
+        "timestamp": "2026-01-31T13:06:53.007822"
+      },
+      {
+        "severity": "warning",
+        "table": "Baggage",
+        "issue_type": "gsi_not_active",
+        "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:53.613271"
+      },
+      {
+        "severity": "warning",
+        "table": "Baggage",
+        "issue_type": "gsi_missing",
+        "description": "GSI location-status-index not found on table Baggage",
+        "record_id": null,
+        "fix_suggestion": "Run scripts/create_gsis.py to add location-status-index",
+        "timestamp": "2026-01-31T13:06:53.808841"
+      },
+      {
+        "severity": "info",
+        "table": "flights",
+        "issue_type": "gsi_query_success",
+        "description": "GSI flight-number-date-index query successful - no table scan detected",
+        "record_id": null,
+        "fix_suggestion": null,
+        "timestamp": "2026-01-31T13:06:54.989961"
+      },
+      {
+        "severity": "warning",
+        "table": "flights",
+        "issue_type": "gsi_not_active",
+        "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:55.186692"
+      },
+      {
+        "severity": "warning",
+        "table": "bookings",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:55.577474"
+      },
+      {
+        "severity": "warning",
+        "table": "MaintenanceWorkOrders",
+        "issue_type": "gsi_not_active",
+        "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:55.969558"
+      },
+      {
+        "severity": "warning",
+        "table": "CrewRoster",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:56.370121"
+      },
+      {
+        "severity": "warning",
+        "table": "CargoFlightAssignments",
+        "issue_type": "gsi_not_active",
+        "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:56.758570"
+      },
+      {
+        "severity": "warning",
+        "table": "Baggage",
+        "issue_type": "gsi_not_active",
+        "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+        "record_id": null,
+        "fix_suggestion": "Wait for GSI to become ACTIVE",
+        "timestamp": "2026-01-31T13:06:57.155938"
+      },
+      {
+        "severity": "error",
+        "table": "GSI_VALIDATION",
+        "issue_type": "gsi_validation_incomplete",
+        "description": "GSI validation incomplete: 6 issues found out of 7 GSIs",
+        "record_id": null,
+        "fix_suggestion": "Run scripts/create_gsis.py to create missing GSIs and fix schema issues",
+        "timestamp": "2026-01-31T13:06:57.156429"
+      },
+      {
+        "severity": "info",
+        "table": "IAM",
+        "issue_type": "role_exists",
+        "description": "IAM role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 exists",
+        "record_id": null,
+        "fix_suggestion": null,
+        "timestamp": "2026-01-31T13:06:57.980622"
+      },
+      {
+        "severity": "info",
+        "table": "IAM",
+        "issue_type": "dynamodb_permissions_ok",
+        "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 has required DynamoDB permissions",
+        "record_id": null,
+        "fix_suggestion": null,
+        "timestamp": "2026-01-31T13:06:58.883807"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "missing_table_access",
+        "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 may not have access to tables: AircraftAvailability, Baggage, CargoFlightAssignments, CargoShipments, CrewMembers, CrewRoster, MaintenanceStaff, MaintenanceWorkOrders, Weather, bookings, flights, maintenance_roster, passengers",
+        "record_id": null,
+        "fix_suggestion": "Add table-specific permissions to IAM policy or use wildcard for development",
+        "timestamp": "2026-01-31T13:06:58.883935"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'crew_compliance' may not have access to tables: flights, CrewRoster, CrewMembers",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, CrewMembers",
+        "timestamp": "2026-01-31T13:06:58.883983"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'maintenance' may not have access to tables: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+        "timestamp": "2026-01-31T13:06:58.884026"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'regulatory' may not have access to tables: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+        "timestamp": "2026-01-31T13:06:58.884066"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'network' may not have access to tables: flights, AircraftAvailability",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, AircraftAvailability",
+        "timestamp": "2026-01-31T13:06:58.884105"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'guest_experience' may not have access to tables: flights, bookings, Baggage",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, Baggage",
+        "timestamp": "2026-01-31T13:06:58.884144"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'cargo' may not have access to tables: flights, CargoFlightAssignments, CargoShipments",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, CargoFlightAssignments, CargoShipments",
+        "timestamp": "2026-01-31T13:06:58.884181"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'finance' may not have access to tables: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+        "timestamp": "2026-01-31T13:06:58.884219"
+      },
+      {
+        "severity": "warning",
+        "table": "IAM",
+        "issue_type": "agent_table_access_incomplete",
+        "description": "Agent 'arbitrator' may not have access to tables: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+        "record_id": null,
+        "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+        "timestamp": "2026-01-31T13:06:58.884258"
+      }
+    ],
+    "by_severity": {
+      "errors": [
+        {
+          "severity": "error",
+          "table": "GSI_VALIDATION",
+          "issue_type": "gsi_validation_incomplete",
+          "description": "GSI validation incomplete: 6 issues found out of 7 GSIs",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to create missing GSIs and fix schema issues",
+          "timestamp": "2026-01-31T13:06:57.156429"
+        }
+      ],
+      "warnings": [
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:49.414401"
+        },
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.028265"
+        },
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.634346"
+        },
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.223434"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.813434"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_missing",
+          "description": "GSI shipment-index not found on table CargoFlightAssignments",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add shipment-index",
+          "timestamp": "2026-01-31T13:06:53.007822"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:53.613271"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_missing",
+          "description": "GSI location-status-index not found on table Baggage",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add location-status-index",
+          "timestamp": "2026-01-31T13:06:53.808841"
+        },
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.186692"
+        },
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.577474"
+        },
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.969558"
+        },
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.370121"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.758570"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:57.155938"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "missing_table_access",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 may not have access to tables: AircraftAvailability, Baggage, CargoFlightAssignments, CargoShipments, CrewMembers, CrewRoster, MaintenanceStaff, MaintenanceWorkOrders, Weather, bookings, flights, maintenance_roster, passengers",
+          "record_id": null,
+          "fix_suggestion": "Add table-specific permissions to IAM policy or use wildcard for development",
+          "timestamp": "2026-01-31T13:06:58.883935"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'crew_compliance' may not have access to tables: flights, CrewRoster, CrewMembers",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, CrewMembers",
+          "timestamp": "2026-01-31T13:06:58.883983"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'maintenance' may not have access to tables: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884026"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'regulatory' may not have access to tables: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "timestamp": "2026-01-31T13:06:58.884066"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'network' may not have access to tables: flights, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884105"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'guest_experience' may not have access to tables: flights, bookings, Baggage",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, Baggage",
+          "timestamp": "2026-01-31T13:06:58.884144"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'cargo' may not have access to tables: flights, CargoFlightAssignments, CargoShipments",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CargoFlightAssignments, CargoShipments",
+          "timestamp": "2026-01-31T13:06:58.884181"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'finance' may not have access to tables: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "timestamp": "2026-01-31T13:06:58.884219"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'arbitrator' may not have access to tables: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "timestamp": "2026-01-31T13:06:58.884258"
+        }
+      ],
+      "info": [
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:50.638144"
+        },
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:54.989961"
+        },
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "role_exists",
+          "description": "IAM role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 exists",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:57.980622"
+        },
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "dynamodb_permissions_ok",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 has required DynamoDB permissions",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:58.883807"
+        }
+      ]
+    },
+    "by_table": {
+      "flights": [
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:49.414401"
+        },
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:50.638144"
+        },
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:54.989961"
+        },
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.186692"
+        }
+      ],
+      "bookings": [
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.028265"
+        },
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.577474"
+        }
+      ],
+      "CrewRoster": [
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.634346"
+        },
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.370121"
+        }
+      ],
+      "MaintenanceWorkOrders": [
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.223434"
+        },
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.969558"
+        }
+      ],
+      "CargoFlightAssignments": [
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.813434"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_missing",
+          "description": "GSI shipment-index not found on table CargoFlightAssignments",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add shipment-index",
+          "timestamp": "2026-01-31T13:06:53.007822"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.758570"
+        }
+      ],
+      "Baggage": [
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:53.613271"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_missing",
+          "description": "GSI location-status-index not found on table Baggage",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add location-status-index",
+          "timestamp": "2026-01-31T13:06:53.808841"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:57.155938"
+        }
+      ],
+      "GSI_VALIDATION": [
+        {
+          "severity": "error",
+          "table": "GSI_VALIDATION",
+          "issue_type": "gsi_validation_incomplete",
+          "description": "GSI validation incomplete: 6 issues found out of 7 GSIs",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to create missing GSIs and fix schema issues",
+          "timestamp": "2026-01-31T13:06:57.156429"
+        }
+      ],
+      "IAM": [
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "role_exists",
+          "description": "IAM role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 exists",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:57.980622"
+        },
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "dynamodb_permissions_ok",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 has required DynamoDB permissions",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:58.883807"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "missing_table_access",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 may not have access to tables: AircraftAvailability, Baggage, CargoFlightAssignments, CargoShipments, CrewMembers, CrewRoster, MaintenanceStaff, MaintenanceWorkOrders, Weather, bookings, flights, maintenance_roster, passengers",
+          "record_id": null,
+          "fix_suggestion": "Add table-specific permissions to IAM policy or use wildcard for development",
+          "timestamp": "2026-01-31T13:06:58.883935"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'crew_compliance' may not have access to tables: flights, CrewRoster, CrewMembers",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, CrewMembers",
+          "timestamp": "2026-01-31T13:06:58.883983"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'maintenance' may not have access to tables: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884026"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'regulatory' may not have access to tables: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "timestamp": "2026-01-31T13:06:58.884066"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'network' may not have access to tables: flights, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884105"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'guest_experience' may not have access to tables: flights, bookings, Baggage",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, Baggage",
+          "timestamp": "2026-01-31T13:06:58.884144"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'cargo' may not have access to tables: flights, CargoFlightAssignments, CargoShipments",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CargoFlightAssignments, CargoShipments",
+          "timestamp": "2026-01-31T13:06:58.884181"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'finance' may not have access to tables: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "timestamp": "2026-01-31T13:06:58.884219"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'arbitrator' may not have access to tables: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "timestamp": "2026-01-31T13:06:58.884258"
+        }
+      ]
+    },
+    "by_type": {
+      "gsi_not_active": [
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:49.414401"
+        },
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.028265"
+        },
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:51.634346"
+        },
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.223434"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:52.813434"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:53.613271"
+        },
+        {
+          "severity": "warning",
+          "table": "flights",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on flights is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.186692"
+        },
+        {
+          "severity": "warning",
+          "table": "bookings",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-id-index on bookings is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.577474"
+        },
+        {
+          "severity": "warning",
+          "table": "MaintenanceWorkOrders",
+          "issue_type": "gsi_not_active",
+          "description": "GSI aircraft-registration-index on MaintenanceWorkOrders is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:55.969558"
+        },
+        {
+          "severity": "warning",
+          "table": "CrewRoster",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-position-index on CrewRoster is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.370121"
+        },
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_not_active",
+          "description": "GSI flight-loading-index on CargoFlightAssignments is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:56.758570"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_not_active",
+          "description": "GSI booking-index on Baggage is CREATING, not ACTIVE",
+          "record_id": null,
+          "fix_suggestion": "Wait for GSI to become ACTIVE",
+          "timestamp": "2026-01-31T13:06:57.155938"
+        }
+      ],
+      "gsi_query_success": [
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:50.638144"
+        },
+        {
+          "severity": "info",
+          "table": "flights",
+          "issue_type": "gsi_query_success",
+          "description": "GSI flight-number-date-index query successful - no table scan detected",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:54.989961"
+        }
+      ],
+      "gsi_missing": [
+        {
+          "severity": "warning",
+          "table": "CargoFlightAssignments",
+          "issue_type": "gsi_missing",
+          "description": "GSI shipment-index not found on table CargoFlightAssignments",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add shipment-index",
+          "timestamp": "2026-01-31T13:06:53.007822"
+        },
+        {
+          "severity": "warning",
+          "table": "Baggage",
+          "issue_type": "gsi_missing",
+          "description": "GSI location-status-index not found on table Baggage",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to add location-status-index",
+          "timestamp": "2026-01-31T13:06:53.808841"
+        }
+      ],
+      "gsi_validation_incomplete": [
+        {
+          "severity": "error",
+          "table": "GSI_VALIDATION",
+          "issue_type": "gsi_validation_incomplete",
+          "description": "GSI validation incomplete: 6 issues found out of 7 GSIs",
+          "record_id": null,
+          "fix_suggestion": "Run scripts/create_gsis.py to create missing GSIs and fix schema issues",
+          "timestamp": "2026-01-31T13:06:57.156429"
+        }
+      ],
+      "role_exists": [
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "role_exists",
+          "description": "IAM role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 exists",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:57.980622"
+        }
+      ],
+      "dynamodb_permissions_ok": [
+        {
+          "severity": "info",
+          "table": "IAM",
+          "issue_type": "dynamodb_permissions_ok",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 has required DynamoDB permissions",
+          "record_id": null,
+          "fix_suggestion": null,
+          "timestamp": "2026-01-31T13:06:58.883807"
+        }
+      ],
+      "missing_table_access": [
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "missing_table_access",
+          "description": "Role AmazonBedrockAgentCoreSDKRuntime-us-east-1-51e75bb8e1 may not have access to tables: AircraftAvailability, Baggage, CargoFlightAssignments, CargoShipments, CrewMembers, CrewRoster, MaintenanceStaff, MaintenanceWorkOrders, Weather, bookings, flights, maintenance_roster, passengers",
+          "record_id": null,
+          "fix_suggestion": "Add table-specific permissions to IAM policy or use wildcard for development",
+          "timestamp": "2026-01-31T13:06:58.883935"
+        }
+      ],
+      "agent_table_access_incomplete": [
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'crew_compliance' may not have access to tables: flights, CrewRoster, CrewMembers",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, CrewMembers",
+          "timestamp": "2026-01-31T13:06:58.883983"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'maintenance' may not have access to tables: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884026"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'regulatory' may not have access to tables: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CrewRoster, MaintenanceWorkOrders, Weather",
+          "timestamp": "2026-01-31T13:06:58.884066"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'network' may not have access to tables: flights, AircraftAvailability",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, AircraftAvailability",
+          "timestamp": "2026-01-31T13:06:58.884105"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'guest_experience' may not have access to tables: flights, bookings, Baggage",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, Baggage",
+          "timestamp": "2026-01-31T13:06:58.884144"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'cargo' may not have access to tables: flights, CargoFlightAssignments, CargoShipments",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, CargoFlightAssignments, CargoShipments",
+          "timestamp": "2026-01-31T13:06:58.884181"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'finance' may not have access to tables: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders",
+          "timestamp": "2026-01-31T13:06:58.884219"
+        },
+        {
+          "severity": "warning",
+          "table": "IAM",
+          "issue_type": "agent_table_access_incomplete",
+          "description": "Agent 'arbitrator' may not have access to tables: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "record_id": null,
+          "fix_suggestion": "Ensure IAM policy grants access to: flights, bookings, passengers, CrewRoster, CrewMembers, MaintenanceWorkOrders, MaintenanceStaff, maintenance_roster, AircraftAvailability, CargoFlightAssignments, CargoShipments, Baggage, Weather",
+          "timestamp": "2026-01-31T13:06:58.884258"
+        }
+      ]
+    },
+    "critical": [
+      {
+        "severity": "error",
+        "table": "GSI_VALIDATION",
+        "issue_type": "gsi_validation_incomplete",
+        "description": "GSI validation incomplete: 6 issues found out of 7 GSIs",
+        "record_id": null,
+        "fix_suggestion": "Run scripts/create_gsis.py to create missing GSIs and fix schema issues",
+        "timestamp": "2026-01-31T13:06:57.156429"
+      }
+    ],
+    "unresolved": []
+  },
+  "recommendations": [
+    {
+      "priority": "high",
+      "category": "database_schema",
+      "action": "Create missing Global Secondary Indexes",
+      "command": "python scripts/create_gsis.py",
+      "description": "Found 15 GSI-related issues. Run the GSI creation script to add required indexes."
+    },
+    {
+      "priority": "medium",
+      "category": "database_schema",
+      "action": "Wait for GSI activation",
+      "description": "Found 12 GSIs that are not yet ACTIVE. Wait for GSI creation to complete."
+    },
+    {
+      "priority": "high",
+      "category": "security",
+      "action": "Verify IAM permissions",
+      "description": "Review and update IAM roles for AgentCore agents to ensure proper DynamoDB access."
+    }
+  ],
+  "gsi_validation": {
+    "total_gsis": 7,
+    "validated": 1,
+    "missing": 6,
+    "inactive": 0,
+    "schema_mismatch": 0,
+    "query_test_passed": 1,
+    "query_test_failed": 0
+  }
+}

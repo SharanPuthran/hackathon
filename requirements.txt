@@ -1,6 +1,7 @@
 # AWS Bedrock (All models via Bedrock)
 boto3>=1.34.0
 botocore>=1.34.0
+aioboto3>=12.0.0
 
 # Database
 asyncpg>=0.29.0

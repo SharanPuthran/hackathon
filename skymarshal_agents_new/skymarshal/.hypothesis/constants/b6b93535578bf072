@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/utils/response.py
+# hypothesis_version: 6.151.4
+
+[500, 'BLOCKING', 'CANNOT_PROCEED', 'HIGH', 'LOW', 'MEDIUM', 'agent', 'aircraft aog', 'airworthiness issue', 'blocking', 'blocking constraint', 'blocking_constraints', 'business_assessment', 'cannot proceed', 'cargo', 'cargo_impact', 'category', 'constraint', 'crew unavailable', 'crew_compliance', 'critical', 'curfew violation', 'error', 'finance', 'financial_impact', 'ftl violation', 'guest_experience', 'impact_scores', 'maintenance', 'network', 'network_impact', 'not_found', 'overall_score', 'passenger_impact', 'prohibited', 'recommendations', 'regulatory', 'result', 'safety violation', 'safety_assessment', 'severity', 'status', 'timestamp', 'unsafe', 'unsafe operation', 'workflow_status']

@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/database/dynamodb.py
+# hypothesis_version: 6.151.4
+
+[':bid', ':fid', ':fn', ':pid', ':reg', ':sd', ':sid', ':status', ':wid', 'AircraftAvailability', 'AircraftSwapOptions', 'Baggage', 'Bookings', 'CargoShipments', 'CrewMembers', 'CrewRoster', 'DisruptedPassengers', 'DynamoDBClient', 'Flights', 'InboundFlightImpact', 'Item', 'Items', 'MaintenanceRoster', 'MaintenanceStaff', 'Passengers', 'Weather', 'aircraftRegistration', 'airport_code', 'booking-index', 'booking_id = :bid', 'crew_id', 'dynamodb', 'flight-loading-index', 'flight-status-index', 'flight_id', 'flight_id = :fid', 'forecast_time_zulu', 'passenger_id', 'passenger_id = :pid', 'scenario', 'shipment-index', 'shipment_id', 'shipment_id = :sid', 'us-east-1', 'valid_from_zulu', 'workorder_id = :wid']

@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/database/tools.py
+# hypothesis_version: 6.151.4
+
+['Composite key lookup', 'Direct key lookup', 'GSI: booking-index', 'GSI: shipment-index', 'airport_code', 'availability', 'baggage', 'baggage_count', 'booking_count', 'booking_id', 'bookings', 'cargo', 'cargo_count', 'crew_compliance', 'crew_count', 'crew_details', 'crew_id', 'error', 'flight_assignments', 'flight_details', 'flight_id', 'forecast_time', 'impact', 'passenger_details', 'passenger_id', 'query_method', 'roster', 'scenario', 'shipment_details', 'shipment_id', 'staff_count', 'table', 'total_weight_kg', 'weather', 'weight_on_flight_kg', 'workorder_count', 'workorder_id', 'workorders']

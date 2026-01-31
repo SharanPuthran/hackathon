@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/model/load.py
+# hypothesis_version: 6.151.4
+
+[0.3, 8192, 'max_tokens', 'temperature']

@@ -1,0 +1,38 @@
+{
+  "summary": {
+    "csv_files": 23,
+    "dynamodb_tables": 23,
+    "matched": 23,
+    "missing_tables": 0,
+    "orphaned_tables": 0,
+    "critical_missing": 0
+  },
+  "matched_csvs": [
+    "aircraft_availability_enriched_mel.csv",
+    "aircraft_maintenance_workorders.csv",
+    "aircraft_swap_options.csv",
+    "baggage.csv",
+    "bookings.csv",
+    "business_impact_assessment.csv",
+    "cargo_flight_assignments.csv",
+    "cargo_shipments.csv",
+    "crew_members_enriched.csv",
+    "crew_roster_enriched.csv",
+    "disrupted_passengers_scenario.csv",
+    "disruption_costs.csv",
+    "disruption_events.csv",
+    "financial_parameters.csv",
+    "financial_transactions.csv",
+    "flights_enriched_mel.csv",
+    "inbound_flight_impact.csv",
+    "maintenance_staff.csv",
+    "passengers_enriched_final.csv",
+    "recovery_actions.csv",
+    "recovery_scenarios.csv",
+    "safety_constraints.csv",
+    "weather.csv"
+  ],
+  "missing_tables": [],
+  "orphaned_tables": [],
+  "critical_missing": []
+}

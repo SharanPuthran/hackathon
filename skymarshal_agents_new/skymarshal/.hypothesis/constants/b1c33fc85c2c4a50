@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/agents/cargo/agent.py
+# hypothesis_version: 6.151.4
+
+['CANNOT_PROCEED', 'FAILURE', 'Full traceback:', 'agent', 'args', 'assessment', 'business', 'cargo', 'category', 'content', 'error', 'error_type', 'failure_reason', 'messages', 'prompt', 'recommendations', 'result', 'role', 'status', 'success', 'system', 'tool_calls', 'user']
