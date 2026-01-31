@@ -224,6 +224,61 @@ class TestDisruptionPayload:
             )
         assert "phase" in str(exc_info.value).lower()
 
+    def test_empty_user_prompt(self):
+        """Test that empty user prompt raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            DisruptionPayload(
+                user_prompt="",
+                phase="initial",
+            )
+        assert "User prompt cannot be empty" in str(exc_info.value)
+
+    def test_whitespace_only_user_prompt(self):
+        """Test that whitespace-only user prompt raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            DisruptionPayload(
+                user_prompt="   ",
+                phase="initial",
+            )
+        assert "User prompt cannot be empty" in str(exc_info.value)
+
+    def test_too_short_user_prompt(self):
+        """Test that too short user prompt raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            DisruptionPayload(
+                user_prompt="EY123",
+                phase="initial",
+            )
+        assert "User prompt too short" in str(exc_info.value)
+
+    def test_revision_phase_without_recommendations(self):
+        """Test that revision phase without other_recommendations raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            DisruptionPayload(
+                user_prompt="Flight EY123 on January 20th had a mechanical failure",
+                phase="revision",
+                other_recommendations=None,
+            )
+        assert "other_recommendations is required in revision phase" in str(exc_info.value)
+
+    def test_initial_phase_with_recommendations(self):
+        """Test that initial phase with other_recommendations raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            DisruptionPayload(
+                user_prompt="Flight EY123 on January 20th had a mechanical failure",
+                phase="initial",
+                other_recommendations={"agent": "test"},
+            )
+        assert "other_recommendations should not be provided in initial phase" in str(exc_info.value)
+
+    def test_user_prompt_whitespace_stripping(self):
+        """Test that user prompt whitespace is properly stripped"""
+        payload = DisruptionPayload(
+            user_prompt="  Flight EY123 on January 20th had a mechanical failure  ",
+            phase="initial",
+        )
+        assert payload.user_prompt == "Flight EY123 on January 20th had a mechanical failure"
+
 
 # ============================================================================
 # AgentResponse Model Tests
@@ -272,7 +327,7 @@ class TestAgentResponse:
         # Valid confidence values
         for conf in [0.0, 0.5, 1.0]:
             response = AgentResponse(
-                agent_name="test_agent",
+                agent_name="crew_compliance",
                 recommendation="Test",
                 confidence=conf,
                 reasoning="Test",
@@ -284,7 +339,7 @@ class TestAgentResponse:
         for conf in [-0.1, 1.1, 2.0]:
             with pytest.raises(ValidationError):
                 AgentResponse(
-                    agent_name="test_agent",
+                    agent_name="crew_compliance",
                     recommendation="Test",
                     confidence=conf,
                     reasoning="Test",
@@ -295,9 +350,9 @@ class TestAgentResponse:
         """Test AgentResponse with error status"""
         response = AgentResponse(
             agent_name="maintenance",
-            recommendation="",
+            recommendation="Unable to complete analysis",
             confidence=0.0,
-            reasoning="",
+            reasoning="Database connection timeout",
             timestamp=datetime.now(timezone.utc).isoformat(),
             status="error",
             error="Database connection timeout",
@@ -324,6 +379,184 @@ class TestAgentResponse:
         )
 
         assert response.extracted_flight_info == flight_info
+
+    def test_invalid_agent_name(self):
+        """Test that invalid agent name raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="invalid_agent",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        assert "Invalid agent name" in str(exc_info.value)
+
+    def test_valid_agent_names(self):
+        """Test all valid agent names"""
+        valid_agents = [
+            "crew_compliance",
+            "maintenance",
+            "regulatory",
+            "network",
+            "guest_experience",
+            "cargo",
+            "finance",
+            "arbitrator",
+        ]
+
+        for agent_name in valid_agents:
+            response = AgentResponse(
+                agent_name=agent_name,
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+            assert response.agent_name == agent_name
+
+    def test_empty_recommendation(self):
+        """Test that empty recommendation raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        assert "Recommendation cannot be empty" in str(exc_info.value)
+
+    def test_empty_reasoning(self):
+        """Test that empty reasoning raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        assert "Reasoning cannot be empty" in str(exc_info.value)
+
+    def test_invalid_timestamp_format(self):
+        """Test that invalid timestamp format raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp="not-a-timestamp",
+            )
+        assert "Invalid timestamp format" in str(exc_info.value)
+
+    def test_valid_timestamp_formats(self):
+        """Test various valid timestamp formats"""
+        valid_timestamps = [
+            datetime.now(timezone.utc).isoformat(),
+            "2026-02-01T12:00:00Z",
+            "2026-02-01T12:00:00+00:00",
+            "2026-02-01T12:00:00.123456Z",
+        ]
+
+        for timestamp in valid_timestamps:
+            response = AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=timestamp,
+            )
+            assert response.timestamp == timestamp
+
+    def test_invalid_status(self):
+        """Test that invalid status raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                status="invalid_status",
+            )
+        assert "Invalid status" in str(exc_info.value)
+
+    def test_valid_statuses(self):
+        """Test all valid status values"""
+        valid_statuses = ["success", "timeout", "error"]
+
+        for status in valid_statuses:
+            response = AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                status=status,
+            )
+            assert response.status == status
+
+    def test_negative_duration(self):
+        """Test that negative duration raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=-1.0,
+            )
+        assert "Duration cannot be negative" in str(exc_info.value)
+
+    def test_valid_durations(self):
+        """Test valid duration values"""
+        valid_durations = [0.0, 1.5, 10.0, 30.0]
+
+        for duration in valid_durations:
+            response = AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=duration,
+            )
+            assert response.duration_seconds == duration
+
+    def test_business_agent_with_binding_constraints(self):
+        """Test that business agents cannot provide binding constraints"""
+        business_agents = ["network", "guest_experience", "cargo", "finance"]
+
+        for agent_name in business_agents:
+            with pytest.raises(ValidationError) as exc_info:
+                AgentResponse(
+                    agent_name=agent_name,
+                    recommendation="Test",
+                    confidence=0.9,
+                    reasoning="Test",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    binding_constraints=["Some constraint"],
+                )
+            assert "Only safety agents can provide binding constraints" in str(exc_info.value)
+
+    def test_safety_agent_with_binding_constraints(self):
+        """Test that safety agents can provide binding constraints"""
+        safety_agents = ["crew_compliance", "maintenance", "regulatory"]
+
+        for agent_name in safety_agents:
+            response = AgentResponse(
+                agent_name=agent_name,
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                binding_constraints=["Safety constraint"],
+            )
+            assert len(response.binding_constraints) == 1
+            assert response.binding_constraints[0] == "Safety constraint"
 
 
 # ============================================================================
@@ -367,24 +600,24 @@ class TestCollation:
     def test_collation_get_successful_responses(self):
         """Test get_successful_responses method"""
         responses = {
-            "agent1": AgentResponse(
-                agent_name="agent1",
+            "crew_compliance": AgentResponse(
+                agent_name="crew_compliance",
                 recommendation="Test",
                 confidence=0.9,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="success",
             ),
-            "agent2": AgentResponse(
-                agent_name="agent2",
+            "maintenance": AgentResponse(
+                agent_name="maintenance",
                 recommendation="Test",
                 confidence=0.8,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="timeout",
             ),
-            "agent3": AgentResponse(
-                agent_name="agent3",
+            "regulatory": AgentResponse(
+                agent_name="regulatory",
                 recommendation="Test",
                 confidence=0.7,
                 reasoning="Test",
@@ -403,29 +636,29 @@ class TestCollation:
 
         successful = collation.get_successful_responses()
         assert len(successful) == 1
-        assert "agent1" in successful
+        assert "crew_compliance" in successful
 
     def test_collation_get_failed_responses(self):
         """Test get_failed_responses method"""
         responses = {
-            "agent1": AgentResponse(
-                agent_name="agent1",
+            "network": AgentResponse(
+                agent_name="network",
                 recommendation="Test",
                 confidence=0.9,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="success",
             ),
-            "agent2": AgentResponse(
-                agent_name="agent2",
+            "guest_experience": AgentResponse(
+                agent_name="guest_experience",
                 recommendation="Test",
                 confidence=0.8,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="timeout",
             ),
-            "agent3": AgentResponse(
-                agent_name="agent3",
+            "cargo": AgentResponse(
+                agent_name="cargo",
                 recommendation="Test",
                 confidence=0.7,
                 reasoning="Test",
@@ -444,38 +677,38 @@ class TestCollation:
 
         failed = collation.get_failed_responses()
         assert len(failed) == 2
-        assert "agent2" in failed
-        assert "agent3" in failed
+        assert "guest_experience" in failed
+        assert "cargo" in failed
 
     def test_collation_get_agent_count(self):
         """Test get_agent_count method"""
         responses = {
-            "agent1": AgentResponse(
-                agent_name="agent1",
+            "crew_compliance": AgentResponse(
+                agent_name="crew_compliance",
                 recommendation="Test",
                 confidence=0.9,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="success",
             ),
-            "agent2": AgentResponse(
-                agent_name="agent2",
+            "maintenance": AgentResponse(
+                agent_name="maintenance",
                 recommendation="Test",
                 confidence=0.8,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="success",
             ),
-            "agent3": AgentResponse(
-                agent_name="agent3",
+            "regulatory": AgentResponse(
+                agent_name="regulatory",
                 recommendation="Test",
                 confidence=0.7,
                 reasoning="Test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status="timeout",
             ),
-            "agent4": AgentResponse(
-                agent_name="agent4",
+            "network": AgentResponse(
+                agent_name="network",
                 recommendation="Test",
                 confidence=0.6,
                 reasoning="Test",
@@ -496,6 +729,108 @@ class TestCollation:
         assert counts["success"] == 2
         assert counts["timeout"] == 1
         assert counts["error"] == 1
+
+    def test_empty_responses(self):
+        """Test that empty responses dict raises ValidationError"""
+        with pytest.raises(ValidationError) as exc_info:
+            Collation(
+                phase="initial",
+                responses={},
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=0.0,
+            )
+        assert "Responses cannot be empty" in str(exc_info.value)
+
+    def test_mismatched_response_keys(self):
+        """Test that mismatched response keys raise ValidationError"""
+        responses = {
+            "wrong_key": AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            Collation(
+                phase="initial",
+                responses=responses,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=5.0,
+            )
+        assert "does not match agent_name" in str(exc_info.value)
+
+    def test_invalid_timestamp_format(self):
+        """Test that invalid timestamp format raises ValidationError"""
+        responses = {
+            "crew_compliance": AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            Collation(
+                phase="initial",
+                responses=responses,
+                timestamp="not-a-timestamp",
+                duration_seconds=5.0,
+            )
+        assert "Invalid timestamp format" in str(exc_info.value)
+
+    def test_negative_duration(self):
+        """Test that negative duration raises ValidationError"""
+        responses = {
+            "crew_compliance": AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            Collation(
+                phase="initial",
+                responses=responses,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=-1.0,
+            )
+        assert "Duration cannot be negative" in str(exc_info.value)
+
+    def test_valid_timestamp_formats(self):
+        """Test various valid timestamp formats"""
+        responses = {
+            "crew_compliance": AgentResponse(
+                agent_name="crew_compliance",
+                recommendation="Test",
+                confidence=0.9,
+                reasoning="Test",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+        }
+
+        valid_timestamps = [
+            datetime.now(timezone.utc).isoformat(),
+            "2026-02-01T12:00:00Z",
+            "2026-02-01T12:00:00+00:00",
+            "2026-02-01T12:00:00.123456Z",
+        ]
+
+        for timestamp in valid_timestamps:
+            collation = Collation(
+                phase="initial",
+                responses=responses,
+                timestamp=timestamp,
+                duration_seconds=5.0,
+            )
+            assert collation.timestamp == timestamp
 
 
 # ============================================================================

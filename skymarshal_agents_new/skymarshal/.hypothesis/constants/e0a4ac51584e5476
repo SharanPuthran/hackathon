@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/database/constants.py
+# hypothesis_version: 6.151.4
+
+[100, 600, 'AircraftAvailability', 'Baggage', 'CargoShipments', 'CrewMembers', 'CrewRoster', 'MaintenanceStaff', 'PAY_PER_REQUEST', 'Weather', 'arbitrator', 'booking-index', 'bookings', 'cargo', 'crew-duty-date-index', 'crew_compliance', 'finance', 'flight-id-index', 'flight-loading-index', 'flight-status-index', 'flights', 'guest_experience', 'maintenance', 'maintenance_roster', 'network', 'passengers', 'regulatory', 'return_flight_impact', 'shipment-index', 'us-east-1']

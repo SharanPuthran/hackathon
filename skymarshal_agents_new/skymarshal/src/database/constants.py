@@ -42,11 +42,18 @@ AIRCRAFT_REGISTRATION_INDEX: Final[str] = "aircraft-registration-index"
 
 # Bookings table GSIs
 FLIGHT_ID_INDEX: Final[str] = "flight-id-index"
-PASSENGER_FLIGHT_INDEX: Final[str] = "passenger-flight-index"
-FLIGHT_STATUS_INDEX: Final[str] = "flight-status-index"
+PASSENGER_FLIGHT_INDEX: Final[str] = "passenger-flight-index"  # Priority 1
+FLIGHT_STATUS_INDEX: Final[str] = "flight-status-index"  # Priority 1
 
 # CrewRoster table GSIs
 FLIGHT_POSITION_INDEX: Final[str] = "flight-position-index"
+CREW_DUTY_DATE_INDEX: Final[str] = "crew-duty-date-index"  # Priority 1
+
+# Flights table GSIs (additional)
+AIRCRAFT_ROTATION_INDEX: Final[str] = "aircraft-rotation-index"  # Priority 1
+
+# Passengers table GSIs
+PASSENGER_ELITE_TIER_INDEX: Final[str] = "passenger-elite-tier-index"  # Priority 1
 
 # CargoFlightAssignments table GSIs
 FLIGHT_LOADING_INDEX: Final[str] = "flight-loading-index"
@@ -89,7 +96,8 @@ AGENT_TABLE_ACCESS: Final[Dict[str, List[str]]] = {
     "guest_experience": [
         FLIGHTS_TABLE,
         BOOKINGS_TABLE,
-        BAGGAGE_TABLE
+        BAGGAGE_TABLE,
+        PASSENGERS_TABLE  # For elite tier queries
     ],
     "cargo": [
         FLIGHTS_TABLE,
@@ -127,7 +135,8 @@ AGENT_TABLE_ACCESS: Final[Dict[str, List[str]]] = {
 AGENT_GSI_ACCESS: Final[Dict[str, List[str]]] = {
     "crew_compliance": [
         FLIGHT_NUMBER_DATE_INDEX,
-        FLIGHT_POSITION_INDEX
+        FLIGHT_POSITION_INDEX,
+        CREW_DUTY_DATE_INDEX  # Priority 1
     ],
     "maintenance": [
         FLIGHT_NUMBER_DATE_INDEX,
@@ -141,12 +150,17 @@ AGENT_GSI_ACCESS: Final[Dict[str, List[str]]] = {
     ],
     "network": [
         FLIGHT_NUMBER_DATE_INDEX,
-        AIRCRAFT_REGISTRATION_INDEX
+        AIRCRAFT_REGISTRATION_INDEX,
+        AIRCRAFT_ROTATION_INDEX  # Priority 1
     ],
     "guest_experience": [
         FLIGHT_NUMBER_DATE_INDEX,
         FLIGHT_ID_INDEX,
-        BOOKING_INDEX
+        BOOKING_INDEX,
+        PASSENGER_FLIGHT_INDEX,  # Priority 1
+        FLIGHT_STATUS_INDEX,  # Priority 1
+        LOCATION_STATUS_INDEX,
+        PASSENGER_ELITE_TIER_INDEX  # Priority 1
     ],
     "cargo": [
         FLIGHT_NUMBER_DATE_INDEX,
@@ -163,15 +177,18 @@ AGENT_GSI_ACCESS: Final[Dict[str, List[str]]] = {
         # Arbitrator has access to all GSIs
         FLIGHT_NUMBER_DATE_INDEX,
         AIRCRAFT_REGISTRATION_INDEX,
+        AIRCRAFT_ROTATION_INDEX,  # Priority 1
         FLIGHT_ID_INDEX,
-        PASSENGER_FLIGHT_INDEX,
-        FLIGHT_STATUS_INDEX,
+        PASSENGER_FLIGHT_INDEX,  # Priority 1
+        FLIGHT_STATUS_INDEX,  # Priority 1
         FLIGHT_POSITION_INDEX,
+        CREW_DUTY_DATE_INDEX,  # Priority 1
         FLIGHT_LOADING_INDEX,
         SHIPMENT_INDEX,
         BOOKING_INDEX,
         LOCATION_STATUS_INDEX,
-        WORKORDER_SHIFT_INDEX
+        WORKORDER_SHIFT_INDEX,
+        PASSENGER_ELITE_TIER_INDEX  # Priority 1
     ]
 }
 
@@ -206,15 +223,18 @@ ALL_TABLES: Final[List[str]] = [
 ALL_GSIS: Final[List[str]] = [
     FLIGHT_NUMBER_DATE_INDEX,
     AIRCRAFT_REGISTRATION_INDEX,
+    AIRCRAFT_ROTATION_INDEX,  # Priority 1
     FLIGHT_ID_INDEX,
-    PASSENGER_FLIGHT_INDEX,
-    FLIGHT_STATUS_INDEX,
+    PASSENGER_FLIGHT_INDEX,  # Priority 1
+    FLIGHT_STATUS_INDEX,  # Priority 1
     FLIGHT_POSITION_INDEX,
+    CREW_DUTY_DATE_INDEX,  # Priority 1
     FLIGHT_LOADING_INDEX,
     SHIPMENT_INDEX,
     BOOKING_INDEX,
     LOCATION_STATUS_INDEX,
-    WORKORDER_SHIFT_INDEX
+    WORKORDER_SHIFT_INDEX,
+    PASSENGER_ELITE_TIER_INDEX  # Priority 1
 ]
 
 # ============================================================================

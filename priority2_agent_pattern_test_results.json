@@ -1,0 +1,123 @@
+{
+  "timestamp": "2026-01-31T23:31:37.867399",
+  "test_type": "Priority 2 GSI Agent Pattern Validation",
+  "results": [
+    {
+      "agent": "Regulatory Agent",
+      "use_case": "Curfew compliance checks",
+      "gsi": "airport-curfew-index",
+      "queries": [
+        {
+          "airport": 1,
+          "gsi_latency_ms": 427.8709888458252,
+          "scan_latency_ms": 211.15493774414062,
+          "improvement_factor": 0.49350141339034814,
+          "items_found": 50,
+          "status": "WARNING"
+        },
+        {
+          "airport": 6,
+          "gsi_latency_ms": 206.0070037841797,
+          "scan_latency_ms": 203.75609397888184,
+          "improvement_factor": 0.9890736248576482,
+          "items_found": 12,
+          "status": "WARNING"
+        },
+        {
+          "airport": 8,
+          "gsi_latency_ms": 210.01887321472168,
+          "scan_latency_ms": 209.84768867492676,
+          "improvement_factor": 0.999184908779032,
+          "items_found": 20,
+          "status": "WARNING"
+        }
+      ],
+      "summary": {
+        "total_queries": 3,
+        "successful": 3,
+        "avg_gsi_latency_ms": 281.2989552815755,
+        "avg_improvement_factor": 0.8272533156756761,
+        "meets_target": false
+      }
+    },
+    {
+      "agent": "Cargo Agent",
+      "use_case": "Cold chain identification",
+      "gsi": "cargo-temperature-index",
+      "queries": [
+        {
+          "commodity_type": 1,
+          "gsi_latency_ms": 205.40904998779297,
+          "scan_latency_ms": 204.93102073669434,
+          "improvement_factor": 0.997672793622642,
+          "items_found": 0,
+          "temp_sensitive_count": 0,
+          "status": "WARNING"
+        },
+        {
+          "commodity_type": 2,
+          "gsi_latency_ms": 201.3702392578125,
+          "scan_latency_ms": 203.66597175598145,
+          "improvement_factor": 1.0114005550503902,
+          "items_found": 0,
+          "temp_sensitive_count": 0,
+          "status": "WARNING"
+        },
+        {
+          "commodity_type": 3,
+          "gsi_latency_ms": 204.2078971862793,
+          "scan_latency_ms": 204.68711853027344,
+          "improvement_factor": 1.0023467326709554,
+          "items_found": 0,
+          "temp_sensitive_count": 0,
+          "status": "WARNING"
+        }
+      ],
+      "summary": {
+        "total_queries": 3,
+        "successful": 3,
+        "avg_gsi_latency_ms": 203.66239547729492,
+        "avg_improvement_factor": 1.0038066937813293,
+        "meets_target": false
+      }
+    },
+    {
+      "agent": "Maintenance Agent",
+      "use_case": "Maintenance conflict detection",
+      "gsi": "aircraft-maintenance-date-index",
+      "queries": [
+        {
+          "aircraft_registration": "A6-EYA",
+          "gsi_latency_ms": 207.0901393890381,
+          "scan_latency_ms": 207.69286155700684,
+          "improvement_factor": 1.0029104339286599,
+          "items_found": 0,
+          "status": "WARNING"
+        },
+        {
+          "aircraft_registration": "A6-EYB",
+          "gsi_latency_ms": 208.07790756225586,
+          "scan_latency_ms": 205.0480842590332,
+          "improvement_factor": 0.9854389957169473,
+          "items_found": 0,
+          "status": "WARNING"
+        },
+        {
+          "aircraft_registration": "A6-EYC",
+          "gsi_latency_ms": 203.40299606323242,
+          "scan_latency_ms": 207.31520652770996,
+          "improvement_factor": 1.0192337897680785,
+          "items_found": 0,
+          "status": "WARNING"
+        }
+      ],
+      "summary": {
+        "total_queries": 3,
+        "successful": 3,
+        "avg_gsi_latency_ms": 206.1903476715088,
+        "avg_improvement_factor": 1.002527739804562,
+        "meets_target": false
+      }
+    }
+  ]
+}

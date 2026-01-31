@@ -1,0 +1,53 @@
+[
+  {
+    "gsi": "location-status-index",
+    "table": "Baggage",
+    "agent": "guest_experience",
+    "query_pattern": "Find baggage by location and status",
+    "status": "PASS",
+    "latency_ms": 3001.01,
+    "items_returned": 4878,
+    "consumed_capacity": null,
+    "test_params": {
+      "current_location": "AUH",
+      "baggage_status": "CheckedIn"
+    },
+    "warning": "Latency 3001.0058879852295ms exceeds 100ms target"
+  },
+  {
+    "gsi": "passenger-elite-tier-index",
+    "table": "passengers",
+    "agent": "guest_experience",
+    "query_pattern": "Find elite passengers for VIP prioritization",
+    "status": "WARN",
+    "latency_ms": 218.41,
+    "items_returned": 0,
+    "consumed_capacity": null,
+    "test_params": {
+      "frequent_flyer_tier_id": 3,
+      "booking_date_start": "2025-01-31"
+    },
+    "note": "GSI query successful but returned no items (data may not contain indexed attributes)",
+    "warning": "Latency 218.41001510620117ms exceeds 100ms target"
+  },
+  {
+    "gsi": "crew-duty-date-index",
+    "status": "SKIP",
+    "reason": "Missing crew_id or duty_date in sample",
+    "latency_ms": 0
+  },
+  {
+    "gsi": "aircraft-rotation-index",
+    "table": "flights",
+    "agent": "network",
+    "query_pattern": "Find aircraft rotation for propagation analysis",
+    "status": "PASS",
+    "latency_ms": 202.88,
+    "items_returned": 8,
+    "consumed_capacity": null,
+    "test_params": {
+      "aircraft_registration": "A6-EY6"
+    },
+    "warning": "Latency 202.88419723510742ms exceeds 100ms target"
+  }
+]

@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/agents/schemas.py
+# hypothesis_version: 6.151.4
+
+[0.0, 1.0, '+00:00', 'ISO 8601 timestamp', 'Name of the agent', 'Z', '^EY\\d{3,4}$', 'agent_name', 'arbitrator', 'binding_constraints', 'cargo', 'crew_compliance', 'database_tools', 'date', 'disruption_event', 'duration_seconds', 'error', 'finance', 'flight_number', 'guest_experience', 'initial', 'maintenance', 'network', 'phase', 'reasoning', 'recommendation', 'regulatory', 'responses', 'revision', 'status', 'success', 'timeout', 'timestamp', 'user_prompt']

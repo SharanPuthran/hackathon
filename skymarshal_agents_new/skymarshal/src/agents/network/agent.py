@@ -1,16 +1,299 @@
 """Network Agent for SkyMarshal"""
 
+import logging
+from typing import Any, Optional, Dict, List
+import boto3
+from datetime import datetime, timezone
+
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from database.tools import get_network_tools
-from agents.schemas import NetworkOutput
-import logging
-from typing import Any
+
+from database.constants import (
+    FLIGHTS_TABLE,
+    AIRCRAFT_AVAILABILITY_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    AIRCRAFT_REGISTRATION_INDEX,
+    AIRCRAFT_ROTATION_INDEX,
+)
+from agents.schemas import FlightInfo, AgentResponse, NetworkOutput
 
 logger = logging.getLogger(__name__)
 
-# System Prompt for Network Agent (from agents_old - UNCHANGED)
-SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
+# ============================================================================
+# DynamoDB Query Tools for Network Agent
+# ============================================================================
+# 
+# The Network Agent has access to the following tables:
+# - flights: Flight schedule and operational data
+# - AircraftAvailability: Aircraft availability and positioning
+#
+# These tools use GSIs for efficient querying:
+# - flight-number-date-index: Query flights by flight number and date
+# - aircraft-registration-index: Query flights by aircraft registration
+# - aircraft-rotation-index: Query complete aircraft rotations (Priority 1 GSI)
+#
+# ============================================================================
+
+@tool
+def query_flight(flight_number: str, date: str) -> Optional[Dict[str, Any]]:
+    """Query flight by flight number and date using GSI.
+    
+    This tool retrieves flight details from the flights table using the
+    flight-number-date-index GSI for efficient lookup.
+    
+    Args:
+        flight_number: Flight number (e.g., EY123, EY1234)
+        date: Flight date in ISO format (YYYY-MM-DD)
+    
+    Returns:
+        Flight record dict with fields:
+        - flight_id: Unique flight identifier
+        - flight_number: Flight number
+        - aircraft_registration: Aircraft tail number
+        - origin_airport_id: Departure airport code
+        - destination_airport_id: Arrival airport code
+        - scheduled_departure: Scheduled departure time
+        - scheduled_arrival: Scheduled arrival time
+        - status: Flight status
+        Returns None if flight not found
+    
+    Example:
+        >>> flight = query_flight("EY123", "2026-01-20")
+        >>> print(flight["flight_id"])
+        'EY123-20260120'
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        logger.info(f"Querying flight: {flight_number} on {date}")
+        
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={
+                ":fn": flight_number,
+                ":sd": date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found flight: {items[0].get('flight_id')}")
+            return items[0]
+        else:
+            logger.warning(f"Flight not found: {flight_number} on {date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying flight: {e}")
+        return None
+
+
+@tool
+def query_aircraft_rotation(aircraft_registration: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    """Query complete aircraft rotation by aircraft registration and date range.
+    
+    This tool retrieves all flights for a specific aircraft within a date range,
+    ordered by scheduled departure time. Uses the aircraft-rotation-index GSI
+    (Priority 1) for efficient rotation retrieval.
+    
+    Args:
+        aircraft_registration: Aircraft tail number (e.g., A6-APX)
+        start_date: Start date in ISO format (YYYY-MM-DD)
+        end_date: End date in ISO format (YYYY-MM-DD)
+    
+    Returns:
+        List of flight records ordered by scheduled_departure, each containing:
+        - flight_id: Unique flight identifier
+        - flight_number: Flight number
+        - aircraft_registration: Aircraft tail number
+        - origin_airport_id: Departure airport code
+        - destination_airport_id: Arrival airport code
+        - scheduled_departure: Scheduled departure time
+        - scheduled_arrival: Scheduled arrival time
+        - status: Flight status
+        Returns empty list if no flights found
+    
+    Example:
+        >>> rotation = query_aircraft_rotation("A6-APX", "2026-01-20", "2026-01-21")
+        >>> print(f"Aircraft has {len(rotation)} flights in rotation")
+        Aircraft has 4 flights in rotation
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        logger.info(f"Querying aircraft rotation: {aircraft_registration} from {start_date} to {end_date}")
+        
+        response = flights_table.query(
+            IndexName=AIRCRAFT_ROTATION_INDEX,
+            KeyConditionExpression="aircraft_registration = :ar AND scheduled_departure BETWEEN :start AND :end",
+            ExpressionAttributeValues={
+                ":ar": aircraft_registration,
+                ":start": start_date,
+                ":end": end_date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        # Sort by scheduled_departure to ensure correct rotation order
+        items.sort(key=lambda x: x.get("scheduled_departure", ""))
+        
+        logger.info(f"Found {len(items)} flights in rotation for {aircraft_registration}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying aircraft rotation: {e}")
+        return []
+
+
+@tool
+def query_flights_by_aircraft(aircraft_registration: str) -> List[Dict[str, Any]]:
+    """Query all flights for a specific aircraft using GSI.
+    
+    This tool retrieves all flights assigned to a specific aircraft using the
+    aircraft-registration-index GSI.
+    
+    Args:
+        aircraft_registration: Aircraft tail number (e.g., A6-APX)
+    
+    Returns:
+        List of flight records for the aircraft, each containing:
+        - flight_id: Unique flight identifier
+        - flight_number: Flight number
+        - aircraft_registration: Aircraft tail number
+        - origin_airport_id: Departure airport code
+        - destination_airport_id: Arrival airport code
+        - scheduled_departure: Scheduled departure time
+        - scheduled_arrival: Scheduled arrival time
+        - status: Flight status
+        Returns empty list if no flights found
+    
+    Example:
+        >>> flights = query_flights_by_aircraft("A6-APX")
+        >>> print(f"Aircraft has {len(flights)} flights assigned")
+        Aircraft has 12 flights assigned
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        logger.info(f"Querying flights for aircraft: {aircraft_registration}")
+        
+        response = flights_table.query(
+            IndexName=AIRCRAFT_REGISTRATION_INDEX,
+            KeyConditionExpression="aircraft_registration = :ar",
+            ExpressionAttributeValues={
+                ":ar": aircraft_registration,
+            },
+        )
+        
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} flights for aircraft {aircraft_registration}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying flights by aircraft: {e}")
+        return []
+
+
+@tool
+def query_aircraft_availability(aircraft_registration: str, date: str) -> Optional[Dict[str, Any]]:
+    """Query aircraft availability status for a specific date.
+    
+    This tool retrieves aircraft availability information from the
+    AircraftAvailability table.
+    
+    Args:
+        aircraft_registration: Aircraft tail number (e.g., A6-APX)
+        date: Date in ISO format (YYYY-MM-DD)
+    
+    Returns:
+        Aircraft availability record dict with fields:
+        - aircraft_registration: Aircraft tail number
+        - valid_from: Start date of availability period
+        - valid_to: End date of availability period
+        - status: Availability status (AVAILABLE, MAINTENANCE, AOG, etc.)
+        - location: Current airport location
+        - notes: Additional availability notes
+        Returns None if no availability record found
+    
+    Example:
+        >>> availability = query_aircraft_availability("A6-APX", "2026-01-20")
+        >>> print(availability["status"])
+        'AVAILABLE'
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        availability_table = dynamodb.Table(AIRCRAFT_AVAILABILITY_TABLE)
+        
+        logger.info(f"Querying aircraft availability: {aircraft_registration} on {date}")
+        
+        # Query using composite key (aircraft_registration, valid_from)
+        response = availability_table.query(
+            KeyConditionExpression="aircraft_registration = :ar AND valid_from <= :date",
+            FilterExpression="valid_to >= :date",
+            ExpressionAttributeValues={
+                ":ar": aircraft_registration,
+                ":date": date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found availability for {aircraft_registration}: {items[0].get('status')}")
+            return items[0]
+        else:
+            logger.warning(f"No availability record found for {aircraft_registration} on {date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying aircraft availability: {e}")
+        return None
+
+
+# System Prompt for Network Agent - UPDATED for Multi-Round Orchestration
+SYSTEM_PROMPT = """You are the SkyMarshal Network Agent - the authoritative expert on aircraft rotations, network connectivity, and propagation impact analysis for airline disruption management.
+
+## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
+
+⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
+
+The orchestrator will provide you with a raw natural language prompt from the user. You MUST:
+
+1. **Extract Flight Information**: Use LangChain structured output to extract:
+   - Flight number (format: EY followed by 3-4 digits, e.g., EY123)
+   - Date (convert any format to ISO 8601: YYYY-MM-DD)
+   - Disruption event description
+
+2. **Query Flight Data**: Use the extracted flight_number and date to query the flights table
+
+3. **Retrieve Aircraft Rotation**: Use the aircraft_registration to query complete rotation
+
+4. **Perform Network Analysis**: Calculate propagation chains, connection impacts, and recovery options
+
+5. **Return Structured Response**: Provide recommendation with confidence and reasoning
+
+## Example Natural Language Prompts You Will Receive
+
+- "Flight EY123 on January 20th had a mechanical failure"
+- "EY456 yesterday was delayed 3 hours due to weather"
+- "Flight EY789 on 20/01/2026 needs network impact assessment for 2-hour delay"
+
+## Your Extraction Responsibility
+
+You will use the FlightInfo Pydantic model with LangChain's with_structured_output() to extract:
+```python
+FlightInfo(
+    flight_number="EY123",
+    date="2026-01-20",  # Converted to ISO format
+    disruption_event="mechanical failure"
+)
+```
+
+## CRITICAL RULES - DATA RETRIEVAL
 ⚠️ **YOU MUST ONLY USE TOOLS TO RETRIEVE DATA. NEVER GENERATE OR ASSUME DATA.**
 
 1. **ALWAYS query database tools FIRST** before making any assessment
@@ -21,16 +304,47 @@ SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
 6. **All data MUST come from tool calls** - no exceptions
 
 ## FAILURE RESPONSE FORMAT
-If you cannot retrieve required data or tools fail, return a structured response with:
-- agent: agent name
-- assessment: "CANNOT_PROCEED"
-- status: "FAILURE"
-- failure_reason: specific reason
-- missing_data: list of missing data
-- attempted_tools: list of attempted tools
-- recommendations: guidance for resolution
+If you cannot retrieve required data or tools fail, respond with:
+```json
+{
+  "agent_name": "network",
+  "recommendation": "CANNOT_PROCEED",
+  "confidence": 0.0,
+  "binding_constraints": [],
+  "reasoning": "Specific reason for failure (e.g., 'Tool query_flight failed', 'Missing flight_id in payload')",
+  "data_sources": [],
+  "extracted_flight_info": {...},
+  "timestamp": "ISO 8601 timestamp",
+  "status": "error",
+  "error": "Detailed error message"
+}
+```
 
-You are the SkyMarshal Network Agent - the authoritative expert on aircraft rotations, network connectivity, and propagation impact analysis for airline disruption management.
+## Real-Time Database Access
+You have access to live operational data from DynamoDB through the following tools:
+
+**Available Tools:**
+1. `query_flight(flight_number, date)` - Get flight details by flight number and date
+   - Uses DynamoDB flights table with flight-number-date-index GSI
+   - Returns: flight_id, aircraft_registration, route, schedule
+   - Query time: ~15-20ms
+
+2. `query_aircraft_rotation(aircraft_registration, start_date, end_date)` - Get complete aircraft rotation
+   - Uses DynamoDB flights table with aircraft-rotation-index GSI (Priority 1)
+   - Returns: All flights for aircraft ordered by departure time
+   - Query time: ~20-30ms
+
+3. `query_flights_by_aircraft(aircraft_registration)` - Get all flights for an aircraft
+   - Uses DynamoDB flights table with aircraft-registration-index GSI
+   - Returns: All flights assigned to the aircraft
+   - Query time: ~15-20ms
+
+4. `query_aircraft_availability(aircraft_registration, date)` - Get aircraft availability status
+   - Uses DynamoDB AircraftAvailability table
+   - Returns: Availability status, location, maintenance windows
+   - Query time: ~10-15ms
+
+**IMPORTANT**: ALWAYS query the database FIRST using these tools before making any network assessment. Never make assumptions about aircraft rotations or availability - use real data.
 
 Your mission is OPTIMAL NETWORK RECOVERY. You analyze complete aircraft rotations, calculate propagation chains, identify critical connections, generate recovery options, and recommend Pareto-optimal solutions that balance cost, service quality, and network health.
 
@@ -1269,75 +1583,178 @@ When analyzing network impact for a disruption, follow this **comprehensive 15-s
 
 async def analyze_network(payload: dict, llm: Any, mcp_tools: list) -> dict:
     """
-    Network agent analysis function with database integration and structured output.
+    Network agent analysis function with structured output and DynamoDB tools.
     
-    Accepts natural language prompts and uses database tools to extract required information.
+    This function implements the multi-round orchestration pattern:
+    1. Receives natural language prompt from orchestrator
+    2. Uses LangChain structured output to extract FlightInfo
+    3. Queries DynamoDB using agent-specific tools
+    4. Performs network impact analysis
+    5. Returns standardized AgentResponse
+    
+    Args:
+        payload: Dict containing:
+            - user_prompt: Natural language prompt from user
+            - phase: "initial" or "revision"
+            - other_recommendations: Other agents' recommendations (revision only)
+        llm: Bedrock model instance (ChatBedrock)
+        mcp_tools: MCP tools (if any)
+    
+    Returns:
+        Dict with AgentResponse fields:
+            - agent_name: "network"
+            - recommendation: Network impact assessment
+            - confidence: Confidence score (0.0-1.0)
+            - reasoning: Explanation of analysis
+            - data_sources: List of tables queried
+            - extracted_flight_info: Extracted FlightInfo dict
+            - timestamp: ISO 8601 timestamp
+            - status: "success", "timeout", or "error"
+            - duration_seconds: Execution time
     """
+    start_time = datetime.now(timezone.utc)
+    
     try:
-        # Get database tools
-        db_tools = get_network_tools()
-
-        # Create agent with structured output
-        agent = create_agent(
-            model=llm,
-            tools=mcp_tools + db_tools,
-            response_format=NetworkOutput,
-        )
-
-        # Build message
-        prompt = payload.get("prompt", "Analyze this disruption for network")
-
+        # Define agent-specific DynamoDB query tools
+        db_tools = [
+            query_flight,
+            query_aircraft_rotation,
+            query_flights_by_aircraft,
+            query_aircraft_availability,
+        ]
+        
+        # Get user prompt from payload
+        user_prompt = payload.get("user_prompt", payload.get("prompt", ""))
+        phase = payload.get("phase", "initial")
+        
+        if not user_prompt:
+            return {
+                "agent_name": "network",
+                "recommendation": "CANNOT_PROCEED",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": "No user prompt provided in payload",
+                "data_sources": [],
+                "extracted_flight_info": {},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": "Missing user_prompt in payload",
+                "duration_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
+            }
+        
+        # Build system message with phase-specific instructions
         system_message = f"""{SYSTEM_PROMPT}
 
+CURRENT PHASE: {phase}
+
+"""
+        
+        if phase == "revision":
+            other_recommendations = payload.get("other_recommendations", {})
+            system_message += f"""
+REVISION PHASE INSTRUCTIONS:
+You are in the revision phase. Other agents have provided the following recommendations:
+
+{other_recommendations}
+
+Please review these recommendations and determine if you need to revise your network impact assessment.
+Consider:
+- Do other agents' findings change your propagation analysis?
+- Are there crew, maintenance, or regulatory constraints that affect recovery options?
+- Should you adjust your recommended scenario based on cross-functional insights?
+
+"""
+        else:
+            system_message += """
+INITIAL PHASE INSTRUCTIONS:
+You are in the initial phase. Provide your independent network impact assessment.
+
+"""
+        
+        system_message += """
 IMPORTANT: 
-1. Extract flight and network information from the prompt
-2. Use database tools to retrieve connection and propagation data
+1. Extract flight information from the prompt using structured output
+2. Use database tools to retrieve rotation and availability data
 3. Assess network impact and recovery options
 4. If you cannot extract required information, ask for clarification
 5. If database tools fail, return a FAILURE response
 
-Provide analysis using the NetworkOutput schema."""
-
+Provide analysis using the AgentResponse schema with these fields:
+- agent_name: "network"
+- recommendation: Your network impact assessment
+- confidence: Confidence score (0.0-1.0)
+- reasoning: Detailed explanation of your analysis
+- data_sources: List of tables/tools used
+- extracted_flight_info: The FlightInfo you extracted
+- timestamp: Current ISO 8601 timestamp
+- status: "success"
+"""
+        
+        # Create agent with all tools
+        agent = create_agent(
+            model=llm,
+            tools=mcp_tools + db_tools,
+            response_format=AgentResponse,
+        )
+        
         # Run agent
         result = await agent.ainvoke({
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_prompt}
             ]
         })
-
+        
         # Extract structured output
         final_message = result["messages"][-1]
-
-        if hasattr(final_message, "content") and isinstance(
-            final_message.content, dict
-        ):
+        
+        if hasattr(final_message, "content") and isinstance(final_message.content, dict):
             structured_result = final_message.content
         elif hasattr(final_message, "tool_calls") and final_message.tool_calls:
             structured_result = final_message.tool_calls[0]["args"]
         else:
+            # Fallback: create structured response from text
             structured_result = {
-                "agent": "network",
-                "category": "business",
-                "result": str(final_message.content),
+                "agent_name": "network",
+                "recommendation": str(final_message.content),
+                "confidence": 0.8,
+                "binding_constraints": [],
+                "reasoning": "Network impact analysis completed",
+                "data_sources": ["flights", "AircraftAvailability"],
+                "extracted_flight_info": {},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "success",
             }
-
-        structured_result["category"] = "business"
-        structured_result["status"] = "success"
-
+        
+        # Ensure required fields are present
+        structured_result["agent_name"] = "network"
+        structured_result["status"] = structured_result.get("status", "success")
+        structured_result["duration_seconds"] = (datetime.now(timezone.utc) - start_time).total_seconds()
+        
+        # Ensure timestamp is present
+        if "timestamp" not in structured_result:
+            structured_result["timestamp"] = datetime.now(timezone.utc).isoformat()
+        
+        logger.info(f"Network agent completed successfully in {structured_result['duration_seconds']:.2f}s")
         return structured_result
-
+        
     except Exception as e:
         logger.error(f"Error in network agent: {e}")
         logger.exception("Full traceback:")
+        
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        
         return {
-            "agent": "network",
-            "category": "business",
-            "assessment": "CANNOT_PROCEED",
-            "status": "FAILURE",
-            "failure_reason": f"Agent execution error: {str(e)}",
+            "agent_name": "network",
+            "recommendation": "CANNOT_PROCEED",
+            "confidence": 0.0,
+            "binding_constraints": [],
+            "reasoning": f"Agent execution error: {str(e)}",
+            "data_sources": [],
+            "extracted_flight_info": {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "error",
             "error": str(e),
             "error_type": type(e).__name__,
-            "recommendations": ["Agent encountered an error and cannot proceed."],
+            "duration_seconds": duration,
         }

@@ -2,17 +2,63 @@
 
 import logging
 from typing import Any
+import boto3
+from datetime import datetime, timezone
 
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from database.tools import get_regulatory_tools
-from agents.schemas import RegulatoryOutput
+from database.constants import (
+    FLIGHTS_TABLE,
+    CREW_ROSTER_TABLE,
+    MAINTENANCE_WORK_ORDERS_TABLE,
+    WEATHER_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    AIRCRAFT_REGISTRATION_INDEX,
+)
+from agents.schemas import FlightInfo, RegulatoryOutput
 
 logger = logging.getLogger(__name__)
 
-# System Prompt for Regulatory Agent (from agents_old - UNCHANGED)
-SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
+# System Prompt for Regulatory Agent - UPDATED for Multi-Round Orchestration
+SYSTEM_PROMPT = """## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
+
+⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
+
+The orchestrator will provide you with a raw natural language prompt from the user. You MUST:
+
+1. **Extract Flight Information**: Use LangChain structured output to extract:
+   - Flight number (format: EY followed by 3-4 digits, e.g., EY123)
+   - Date (convert any format to ISO 8601: YYYY-MM-DD)
+   - Disruption event description
+
+2. **Query Flight Data**: Use the extracted flight_number and date to query the flights table
+
+3. **Retrieve Operational Data**: Use the flight_id to query regulatory constraints
+
+4. **Perform Regulatory Analysis**: Check NOTAMs, curfews, slots, and compliance
+
+5. **Return Structured Response**: Provide recommendation with confidence and reasoning
+
+## Example Natural Language Prompts You Will Receive
+
+- "Flight EY123 on January 20th had a mechanical failure"
+- "EY456 yesterday was delayed 3 hours due to weather"
+- "Flight EY789 on 20/01/2026 needs regulatory assessment for 2-hour delay"
+
+## Your Extraction Responsibility
+
+You will use the FlightInfo Pydantic model with LangChain's with_structured_output() to extract:
+```python
+FlightInfo(
+    flight_number="EY123",
+    date="2026-01-20",  # Converted to ISO format
+    disruption_event="mechanical failure"
+)
+```
+
+## CRITICAL RULES - DATA RETRIEVAL
 ⚠️ **YOU MUST ONLY USE TOOLS TO RETRIEVE DATA. NEVER GENERATE OR ASSUME DATA.**
 
 1. **ALWAYS query database tools FIRST** before making any assessment
@@ -1184,15 +1230,234 @@ Scheduled arrival: 02:00 UTC (falls within closure window)
 """
 
 
+# ============================================================
+# DYNAMODB QUERY TOOLS - Defined within agent for encapsulation
+# ============================================================
+
+@tool
+def query_flight(flight_number: str, date: str) -> str:
+    """
+    Query flight by flight number and date using GSI.
+
+    Args:
+        flight_number: Flight number (e.g., EY123)
+        date: Flight date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        JSON string containing flight record or error
+    """
+    try:
+        import json
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={
+                ":fn": flight_number,
+                ":sd": date,
+            },
+        )
+        items = response.get("Items", [])
+        
+        if not items:
+            return json.dumps({
+                "error": f"Flight {flight_number} on {date} not found",
+                "flight_number": flight_number,
+                "date": date
+            })
+        
+        result = {
+            "flight_id": items[0].get("flight_id"),
+            "flight_details": items[0],
+            "query_method": f"GSI: {FLIGHT_NUMBER_DATE_INDEX}",
+            "table": FLIGHTS_TABLE
+        }
+        return json.dumps(result, default=str)
+    except Exception as e:
+        logger.error(f"Error in query_flight: {e}")
+        return json.dumps({"error": str(e), "flight_number": flight_number, "date": date})
+
+
+@tool
+def query_crew_roster(flight_id: str) -> str:
+    """
+    Query crew roster for a flight for regulatory checks.
+
+    Args:
+        flight_id: Flight ID
+
+    Returns:
+        JSON string containing crew roster or error
+    """
+    try:
+        import json
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        crew_roster_table = dynamodb.Table(CREW_ROSTER_TABLE)
+
+        response = crew_roster_table.query(
+            IndexName="flight-position-index",
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={":fid": flight_id},
+        )
+        
+        result = {
+            "flight_id": flight_id,
+            "crew_count": len(response.get("Items", [])),
+            "roster": response.get("Items", []),
+            "query_method": "GSI: flight-position-index",
+            "table": CREW_ROSTER_TABLE
+        }
+        return json.dumps(result, default=str)
+    except Exception as e:
+        logger.error(f"Error in query_crew_roster: {e}")
+        return json.dumps({"error": str(e), "flight_id": flight_id})
+
+
+@tool
+def query_maintenance_work_orders(aircraft_registration: str) -> str:
+    """
+    Query maintenance work orders for an aircraft for regulatory checks.
+
+    Args:
+        aircraft_registration: Aircraft registration (e.g., A6-APX)
+
+    Returns:
+        JSON string containing maintenance work orders or error
+    """
+    try:
+        import json
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        maintenance_table = dynamodb.Table(MAINTENANCE_WORK_ORDERS_TABLE)
+
+        response = maintenance_table.query(
+            IndexName=AIRCRAFT_REGISTRATION_INDEX,
+            KeyConditionExpression="aircraftRegistration = :ar",
+            ExpressionAttributeValues={":ar": aircraft_registration},
+        )
+        
+        result = {
+            "aircraft_registration": aircraft_registration,
+            "workorder_count": len(response.get("Items", [])),
+            "workorders": response.get("Items", []),
+            "query_method": f"GSI: {AIRCRAFT_REGISTRATION_INDEX}",
+            "table": MAINTENANCE_WORK_ORDERS_TABLE
+        }
+        return json.dumps(result, default=str)
+    except Exception as e:
+        logger.error(f"Error in query_maintenance_work_orders: {e}")
+        return json.dumps({"error": str(e), "aircraft_registration": aircraft_registration})
+
+
+@tool
+def query_weather(airport_code: str, forecast_time: str) -> str:
+    """
+    Query weather forecast for an airport for regulatory checks.
+
+    Args:
+        airport_code: Airport IATA code (e.g., AUH, LHR)
+        forecast_time: Forecast timestamp in ISO format
+
+    Returns:
+        JSON string containing weather forecast or error
+    """
+    try:
+        import json
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        weather_table = dynamodb.Table(WEATHER_TABLE)
+
+        response = weather_table.get_item(
+            Key={
+                "airport_code": airport_code,
+                "forecast_time": forecast_time
+            }
+        )
+        
+        if "Item" not in response:
+            return json.dumps({
+                "error": f"Weather data not found for {airport_code} at {forecast_time}",
+                "airport_code": airport_code,
+                "forecast_time": forecast_time
+            })
+        
+        result = {
+            "airport_code": airport_code,
+            "forecast_time": forecast_time,
+            "weather": response["Item"],
+            "query_method": "Direct key lookup",
+            "table": WEATHER_TABLE
+        }
+        return json.dumps(result, default=str)
+    except Exception as e:
+        logger.error(f"Error in query_weather: {e}")
+        return json.dumps({"error": str(e), "airport_code": airport_code})
+
+
 async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
     """
     Regulatory agent analysis function with database integration and structured output.
     
     Accepts natural language prompts and uses database tools to extract required information.
+    
+    Args:
+        payload: Dict containing user_prompt (natural language)
+        llm: Bedrock model instance (ChatBedrock)
+        mcp_tools: MCP tools (if any)
+    
+    Returns:
+        Dict with agent response following AgentResponse schema
     """
     try:
-        # Get database tools
-        db_tools = get_regulatory_tools()
+        start_time = datetime.now(timezone.utc)
+        
+        # Define agent-specific DynamoDB query tools
+        db_tools = [
+            query_flight,
+            query_crew_roster,
+            query_maintenance_work_orders,
+            query_weather
+        ]
+
+        # Extract user prompt
+        user_prompt = payload.get("prompt", payload.get("user_prompt", ""))
+        
+        if not user_prompt:
+            return {
+                "agent_name": "regulatory",
+                "recommendation": "CANNOT_PROCEED",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": "No user prompt provided in payload",
+                "data_sources": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": "Missing user_prompt in payload"
+            }
+
+        # Use LangChain structured output to extract flight info
+        structured_llm = llm.with_structured_output(FlightInfo)
+        
+        try:
+            flight_info = await structured_llm.ainvoke(user_prompt)
+            extracted_flight_info = {
+                "flight_number": flight_info.flight_number,
+                "date": flight_info.date,
+                "disruption_event": flight_info.disruption_event
+            }
+        except Exception as e:
+            logger.error(f"Failed to extract flight info: {e}")
+            return {
+                "agent_name": "regulatory",
+                "recommendation": "CANNOT_PROCEED",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": f"Failed to extract flight information from prompt: {str(e)}",
+                "data_sources": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": f"Flight info extraction failed: {str(e)}"
+            }
 
         # Create agent with structured output
         agent = create_agent(
@@ -1201,16 +1466,14 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
             response_format=RegulatoryOutput,
         )
 
-        # Build message
-        prompt = payload.get("prompt", "Analyze this disruption for regulatory")
-
+        # Build enhanced system message
         system_message = f"""{SYSTEM_PROMPT}
 
 IMPORTANT: 
-1. Extract flight and airport information from the prompt
-2. Use database tools to retrieve regulatory constraints
-3. Assess curfews, slots, and regulatory compliance
-4. If you cannot extract required information, ask for clarification
+1. You have already extracted flight information: {extracted_flight_info}
+2. Use the query_flight tool with flight_number="{flight_info.flight_number}" and date="{flight_info.date}"
+3. Use database tools to retrieve regulatory constraints
+4. Assess curfews, slots, and regulatory compliance
 5. If database tools fail, return a FAILURE response
 
 Provide analysis using the RegulatoryOutput schema."""
@@ -1219,7 +1482,7 @@ Provide analysis using the RegulatoryOutput schema."""
         result = await agent.ainvoke({
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_prompt}
             ]
         })
 
@@ -1240,21 +1503,40 @@ Provide analysis using the RegulatoryOutput schema."""
                 "status": "success",
             }
 
+        # Ensure required fields
         structured_result["category"] = "safety"
         structured_result["status"] = "success"
+        structured_result["extracted_flight_info"] = extracted_flight_info
+        
+        # Calculate duration
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        structured_result["duration_seconds"] = duration
 
         return structured_result
 
     except Exception as e:
         logger.error(f"Error in regulatory agent: {e}")
         logger.exception("Full traceback:")
+        
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds() if 'start_time' in locals() else 0.0
+        
         return {
             "agent": "regulatory",
+            "agent_name": "regulatory",
             "category": "safety",
             "assessment": "CANNOT_PROCEED",
-            "status": "FAILURE",
+            "status": "error",
             "failure_reason": f"Agent execution error: {str(e)}",
             "error": str(e),
             "error_type": type(e).__name__,
             "recommendations": ["Agent encountered an error and cannot proceed."],
+            "recommendation": "CANNOT_PROCEED - Agent execution error",
+            "confidence": 0.0,
+            "binding_constraints": [],
+            "reasoning": f"Agent execution failed: {str(e)}",
+            "data_sources": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "duration_seconds": duration
         }

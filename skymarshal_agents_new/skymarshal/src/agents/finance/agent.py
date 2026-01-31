@@ -1,13 +1,268 @@
 """Finance Agent for SkyMarshal"""
 
+import logging
+from typing import Any, Optional, Dict, List
+import boto3
+from datetime import datetime, timezone
+
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from database.tools import get_finance_tools
-from agents.schemas import FinanceOutput
-import logging
-from typing import Any
+
+from database.constants import (
+    FLIGHTS_TABLE,
+    BOOKINGS_TABLE,
+    CARGO_FLIGHT_ASSIGNMENTS_TABLE,
+    MAINTENANCE_WORK_ORDERS_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    FLIGHT_ID_INDEX,
+    FLIGHT_LOADING_INDEX,
+    AIRCRAFT_REGISTRATION_INDEX,
+)
+from agents.schemas import FlightInfo, AgentResponse, FinanceOutput
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# DynamoDB Query Tools for Finance Agent
+# ============================================================================
+# 
+# The Finance Agent has access to the following tables:
+# - flights: Flight schedule and operational data
+# - bookings: Passenger bookings and revenue data
+# - CargoFlightAssignments: Cargo assignments and revenue
+# - MaintenanceWorkOrders: Maintenance costs and schedules
+#
+# These tools use GSIs for efficient querying:
+# - flight-number-date-index: Query flights by flight number and date
+# - flight-id-index: Query bookings by flight ID
+# - flight-loading-index: Query cargo assignments by flight
+# - aircraft-registration-index: Query maintenance by aircraft
+#
+# ============================================================================
+
+@tool
+def query_flight(flight_number: str, date: str) -> Optional[Dict[str, Any]]:
+    """Query flight by flight number and date using GSI.
+    
+    This tool retrieves flight details from the flights table using the
+    flight-number-date-index GSI for efficient lookup.
+    
+    Args:
+        flight_number: Flight number (e.g., EY123, EY1234)
+        date: Flight date in ISO format (YYYY-MM-DD)
+    
+    Returns:
+        Flight record dict with fields:
+        - flight_id: Unique flight identifier
+        - flight_number: Flight number
+        - aircraft_registration: Aircraft tail number
+        - origin_airport_id: Departure airport code
+        - destination_airport_id: Arrival airport code
+        - scheduled_departure: Scheduled departure time
+        - scheduled_arrival: Scheduled arrival time
+        - status: Flight status
+        - aircraft_type: Aircraft type (A380, B787, etc.)
+        Returns None if flight not found
+    
+    Example:
+        >>> flight = query_flight("EY123", "2026-01-20")
+        >>> print(flight["flight_id"])
+        'EY123-20260120'
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        logger.info(f"Querying flight: {flight_number} on {date}")
+        
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={
+                ":fn": flight_number,
+                ":sd": date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found flight: {items[0].get('flight_id')}")
+            return items[0]
+        else:
+            logger.warning(f"Flight not found: {flight_number} on {date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying flight: {e}")
+        return None
+
+
+@tool
+def query_passenger_bookings(flight_id: str) -> List[Dict[str, Any]]:
+    """Query passenger bookings for a flight using GSI.
+    
+    This tool retrieves all passenger bookings for a specific flight using the
+    flight-id-index GSI. Returns booking records with fare and class information.
+    
+    Args:
+        flight_id: Unique flight identifier (e.g., EY123-20260120)
+    
+    Returns:
+        List of booking records, each containing:
+        - booking_id: Unique booking identifier
+        - passenger_id: Passenger identifier
+        - flight_id: Flight identifier
+        - booking_class: Booking class (Economy, Premium Economy, Business, First)
+        - fare_paid: Fare amount paid
+        - booking_status: Status (confirmed, cancelled, etc.)
+        - frequent_flyer_number: Loyalty program number if applicable
+        Returns empty list if no bookings found
+    
+    Example:
+        >>> bookings = query_passenger_bookings("EY123-20260120")
+        >>> total_revenue = sum(b["fare_paid"] for b in bookings)
+        >>> print(f"Total ticket revenue: ${total_revenue}")
+        Total ticket revenue: $528000
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+        
+        logger.info(f"Querying passenger bookings for flight: {flight_id}")
+        
+        response = bookings_table.query(
+            IndexName=FLIGHT_ID_INDEX,
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={
+                ":fid": flight_id,
+            },
+        )
+        
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} bookings for flight {flight_id}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying passenger bookings: {e}")
+        return []
+
+
+@tool
+def query_cargo_revenue(flight_id: str) -> List[Dict[str, Any]]:
+    """Query cargo assignments for revenue calculation using GSI.
+    
+    This tool retrieves all cargo assignments for a specific flight using the
+    flight-loading-index GSI. Returns cargo assignments with weight and value data.
+    
+    Args:
+        flight_id: Unique flight identifier (e.g., EY123-20260120)
+    
+    Returns:
+        List of cargo assignment records, each containing:
+        - assignment_id: Unique assignment identifier
+        - flight_id: Flight identifier
+        - shipment_id: Shipment identifier
+        - weight_kg: Cargo weight in kilograms
+        - loading_status: Status (loaded, offloaded, pending)
+        - revenue_usd: Revenue from this cargo assignment
+        Returns empty list if no cargo found
+    
+    Example:
+        >>> cargo = query_cargo_revenue("EY123-20260120")
+        >>> total_cargo_revenue = sum(c.get("revenue_usd", 0) for c in cargo)
+        >>> print(f"Total cargo revenue: ${total_cargo_revenue}")
+        Total cargo revenue: $45000
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        cargo_table = dynamodb.Table(CARGO_FLIGHT_ASSIGNMENTS_TABLE)
+        
+        logger.info(f"Querying cargo revenue for flight: {flight_id}")
+        
+        response = cargo_table.query(
+            IndexName=FLIGHT_LOADING_INDEX,
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={
+                ":fid": flight_id,
+            },
+        )
+        
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} cargo assignments for flight {flight_id}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying cargo revenue: {e}")
+        return []
+
+
+@tool
+def query_maintenance_costs(aircraft_registration: str) -> List[Dict[str, Any]]:
+    """Query maintenance work orders for cost analysis using GSI.
+    
+    This tool retrieves maintenance work orders for a specific aircraft using the
+    aircraft-registration-index GSI. Returns work orders with cost and schedule data.
+    
+    Args:
+        aircraft_registration: Aircraft tail number (e.g., A6-APX)
+    
+    Returns:
+        List of maintenance work order records, each containing:
+        - workorder_id: Unique work order identifier
+        - aircraft_registration: Aircraft tail number
+        - workorder_type: Type of maintenance (scheduled, unscheduled, AOG)
+        - scheduled_date: Scheduled maintenance date
+        - estimated_cost: Estimated cost in USD
+        - actual_cost: Actual cost if completed
+        - status: Work order status (pending, in_progress, completed)
+        Returns empty list if no work orders found
+    
+    Example:
+        >>> maintenance = query_maintenance_costs("A6-APX")
+        >>> total_cost = sum(m.get("actual_cost", m.get("estimated_cost", 0)) for m in maintenance)
+        >>> print(f"Total maintenance costs: ${total_cost}")
+        Total maintenance costs: $125000
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        maintenance_table = dynamodb.Table(MAINTENANCE_WORK_ORDERS_TABLE)
+        
+        logger.info(f"Querying maintenance costs for aircraft: {aircraft_registration}")
+        
+        response = maintenance_table.query(
+            IndexName=AIRCRAFT_REGISTRATION_INDEX,
+            KeyConditionExpression="aircraftRegistration = :ar",
+            ExpressionAttributeValues={
+                ":ar": aircraft_registration,
+            },
+        )
+        
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} maintenance work orders for aircraft {aircraft_registration}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying maintenance costs: {e}")
+        return []
+
+
+@tool
+def get_current_datetime_tool() -> str:
+    """Returns current UTC datetime for date resolution.
+    
+    Use this tool when you need to resolve relative dates like 'yesterday',
+    'today', or 'tomorrow', or when you need the current date/time for context.
+    
+    Returns:
+        str: Current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
+    
+    Example:
+        >>> current_time = get_current_datetime_tool()
+        >>> print(current_time)
+        '2026-01-30T14:30:00Z'
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 # System Prompt for Finance Agent - ENHANCED (2026-01-31)
 SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
@@ -2499,54 +2754,106 @@ When analyzing financial impact for a disruption, follow this **comprehensive 15
 
 async def analyze_finance(payload: dict, llm: Any, mcp_tools: list) -> dict:
     """
-    Finance agent analysis function with database integration and structured output.
-
-    Accepts natural language prompts and uses database tools to extract required information.
-
+    Finance agent analysis function with structured output and DynamoDB tools.
+    
+    This agent:
+    1. Extracts flight information from natural language using structured output
+    2. Queries DynamoDB for financial data (bookings, cargo, maintenance)
+    3. Calculates cost impacts, compensation, and revenue implications
+    4. Returns structured financial assessment
+    
     Args:
-        payload: Request payload with 'prompt' field containing natural language description
-        llm: Bedrock model instance
+        payload: Request payload with 'user_prompt' field containing natural language
+        llm: Bedrock model instance (ChatBedrock)
         mcp_tools: MCP tools from gateway
-
+    
     Returns:
         dict: Structured finance assessment using FinanceOutput schema
     """
     try:
-        # Get database tools for finance
-        db_tools = get_finance_tools()
+        # Define DynamoDB query tools for Finance Agent
+        db_tools = [
+            query_flight,
+            query_passenger_bookings,
+            query_cargo_revenue,
+            query_maintenance_costs,
+            get_current_datetime_tool,
+        ]
+        
+        # Get user prompt
+        user_prompt = payload.get("user_prompt", payload.get("prompt", ""))
+        phase = payload.get("phase", "initial")
+        other_recommendations = payload.get("other_recommendations", {})
+        
+        # Build system message with phase-specific instructions
+        if phase == "revision":
+            phase_instruction = """
+REVISION PHASE:
+You are reviewing other agents' recommendations and revising your financial assessment if needed.
 
-        # Create agent with structured output using new create_agent API
+Other agents' recommendations:
+{other_recommendations}
+
+Review these recommendations and determine if you need to revise your financial analysis.
+Consider:
+- Do other agents' findings change cost estimates?
+- Are there additional financial impacts not initially considered?
+- Do safety constraints affect financial scenarios?
+- Should financial recommendations be adjusted based on operational constraints?
+
+If revision is warranted, provide updated financial assessment.
+If your initial assessment remains valid, confirm it with brief justification.
+"""
+            phase_instruction = phase_instruction.format(
+                other_recommendations=str(other_recommendations)
+            )
+        else:
+            phase_instruction = """
+INITIAL ANALYSIS PHASE:
+Provide your initial financial assessment of this disruption.
+"""
+        
+        system_message = f"""{SYSTEM_PROMPT}
+
+{phase_instruction}
+
+IMPORTANT INSTRUCTIONS:
+1. Use llm.with_structured_output(FlightInfo) to extract flight information from the prompt
+2. Extract: flight_number, date, and disruption_event from the natural language prompt
+3. Use get_current_datetime_tool() if you need to resolve relative dates (yesterday, today, tomorrow)
+4. Use query_flight() to retrieve flight details using the extracted flight number and date
+5. Use query_passenger_bookings() to get passenger revenue data
+6. Use query_cargo_revenue() to get cargo revenue data
+7. Use query_maintenance_costs() to get maintenance cost data (use aircraft_registration from flight)
+8. Calculate comprehensive financial impact including:
+   - Direct costs (crew, fuel, ground handling, maintenance)
+   - Passenger compensation (EU261/DOT, care costs, rebooking)
+   - Revenue impact (lost revenue, revenue at risk, ancillary loss)
+   - Cargo revenue loss
+9. Rank recovery scenarios by total financial impact
+10. If tools fail or data is missing, return FAILURE status with specific details
+
+Provide your analysis using the FinanceOutput schema with all required fields.
+"""
+        
+        # Create agent with structured output
         agent = create_agent(
             model=llm,
             tools=mcp_tools + db_tools,
             response_format=FinanceOutput,
         )
-
-        # Build message with system prompt
-        prompt = payload.get("prompt", "Analyze this disruption for finance")
-
-        system_message = f"""{SYSTEM_PROMPT}
-
-IMPORTANT: 
-1. Extract flight information from the prompt (flight number, delay duration, etc.)
-2. Use the provided database tools to retrieve financial data and operational information
-3. Calculate cost impacts, compensation, and revenue implications
-4. If you cannot extract required information from the prompt, ask the user for clarification
-5. If database tools fail, return a FAILURE response indicating which data could not be retrieved
-
-Provide analysis from the perspective of finance (business) using the FinanceOutput schema."""
-
+        
         # Run agent
         result = await agent.ainvoke({
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_prompt}
             ]
         })
-
+        
         # Extract structured output
         final_message = result["messages"][-1]
-
+        
         # Check if we got structured output
         if hasattr(final_message, "content") and isinstance(
             final_message.content, dict
@@ -2563,13 +2870,27 @@ Provide analysis from the perspective of finance (business) using the FinanceOut
                 "result": str(final_message.content),
                 "status": "success",
             }
-
-        # Add metadata
-        structured_result["category"] = "business"
-        structured_result["status"] = "success"
-
+        
+        # Ensure required fields are present
+        if "agent" not in structured_result:
+            structured_result["agent"] = "finance"
+        if "category" not in structured_result:
+            structured_result["category"] = "business"
+        if "status" not in structured_result:
+            structured_result["status"] = "success"
+        
+        # Add extracted flight info if available
+        if "extracted_flight_info" not in structured_result:
+            # Try to extract from the result
+            structured_result["extracted_flight_info"] = {
+                "flight_number": "extracted from prompt",
+                "date": "extracted from prompt",
+                "disruption_event": "extracted from prompt"
+            }
+        
+        logger.info(f"Finance agent completed successfully for phase: {phase}")
         return structured_result
-
+        
     except Exception as e:
         logger.error(f"Error in finance agent: {e}")
         logger.exception("Full traceback:")
@@ -2581,5 +2902,11 @@ Provide analysis from the perspective of finance (business) using the FinanceOut
             "failure_reason": f"Agent execution error: {str(e)}",
             "error": str(e),
             "error_type": type(e).__name__,
-            "recommendations": ["Agent encountered an error and cannot proceed."],
+            "recommendations": [
+                "Agent encountered an error and cannot proceed.",
+                "Check logs for detailed error information.",
+                "Verify database connectivity and tool availability."
+            ],
+            "missing_data": ["Unable to complete analysis due to error"],
+            "attempted_tools": ["agent execution failed before tool invocation"],
         }

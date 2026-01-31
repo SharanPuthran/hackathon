@@ -1,13 +1,243 @@
 """Cargo Agent for SkyMarshal"""
 
+import logging
+from typing import Any, Optional, Dict, List
+import boto3
+from datetime import datetime, timezone
+
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from database.tools import get_cargo_tools
-from agents.schemas import CargoOutput
-import logging
-from typing import Any
+
+from database.constants import (
+    FLIGHTS_TABLE,
+    CARGO_FLIGHT_ASSIGNMENTS_TABLE,
+    CARGO_SHIPMENTS_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    FLIGHT_LOADING_INDEX,
+    SHIPMENT_INDEX,
+)
+from agents.schemas import FlightInfo, AgentResponse, CargoOutput
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# DynamoDB Query Tools for Cargo Agent
+# ============================================================================
+# 
+# The Cargo Agent has access to the following tables:
+# - flights: Flight schedule and operational data
+# - CargoFlightAssignments: Cargo assignments to flights
+# - CargoShipments: Detailed cargo shipment information
+#
+# These tools use GSIs for efficient querying:
+# - flight-number-date-index: Query flights by flight number and date
+# - flight-loading-index: Query cargo assignments by flight and loading status
+# - shipment-index: Query cargo assignments by shipment ID
+#
+# ============================================================================
+
+@tool
+def query_flight(flight_number: str, date: str) -> Optional[Dict[str, Any]]:
+    """Query flight by flight number and date using GSI.
+    
+    This tool retrieves flight details from the flights table using the
+    flight-number-date-index GSI for efficient lookup.
+    
+    Args:
+        flight_number: Flight number (e.g., EY123, EY1234)
+        date: Flight date in ISO format (YYYY-MM-DD)
+    
+    Returns:
+        Flight record dict with fields:
+        - flight_id: Unique flight identifier
+        - flight_number: Flight number
+        - aircraft_registration: Aircraft tail number
+        - origin_airport_id: Departure airport code
+        - destination_airport_id: Arrival airport code
+        - scheduled_departure: Scheduled departure time
+        - scheduled_arrival: Scheduled arrival time
+        - status: Flight status
+        Returns None if flight not found
+    
+    Example:
+        >>> flight = query_flight("EY123", "2026-01-20")
+        >>> print(flight["flight_id"])
+        'EY123-20260120'
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        logger.info(f"Querying flight: {flight_number} on {date}")
+        
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={
+                ":fn": flight_number,
+                ":sd": date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found flight: {items[0].get('flight_id')}")
+            return items[0]
+        else:
+            logger.warning(f"Flight not found: {flight_number} on {date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying flight: {e}")
+        return None
+
+
+@tool
+def query_cargo_manifest(flight_id: str) -> List[Dict[str, Any]]:
+    """Query cargo manifest for a flight using GSI.
+    
+    This tool retrieves all cargo assignments for a specific flight using the
+    flight-loading-index GSI. Returns cargo assignments with loading status.
+    
+    Args:
+        flight_id: Unique flight identifier (e.g., EY123-20260120)
+    
+    Returns:
+        List of cargo assignment records, each containing:
+        - assignment_id: Unique assignment identifier
+        - flight_id: Flight identifier
+        - shipment_id: Shipment identifier
+        - loading_status: Status (loaded, offloaded, pending)
+        - weight_kg: Cargo weight in kilograms
+        - priority: Priority level
+        Returns empty list if no cargo found
+    
+    Example:
+        >>> cargo = query_cargo_manifest("EY123-20260120")
+        >>> print(f"Flight has {len(cargo)} cargo assignments")
+        Flight has 12 cargo assignments
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        cargo_table = dynamodb.Table(CARGO_FLIGHT_ASSIGNMENTS_TABLE)
+        
+        logger.info(f"Querying cargo manifest for flight: {flight_id}")
+        
+        response = cargo_table.query(
+            IndexName=FLIGHT_LOADING_INDEX,
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={
+                ":fid": flight_id,
+            },
+        )
+        
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} cargo assignments for flight {flight_id}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying cargo manifest: {e}")
+        return []
+
+
+@tool
+def query_shipment_details(shipment_id: str) -> Optional[Dict[str, Any]]:
+    """Query detailed shipment information by shipment ID.
+    
+    This tool retrieves complete shipment details from the CargoShipments table
+    including AWB information, commodity type, temperature requirements, and value.
+    
+    Args:
+        shipment_id: Unique shipment identifier
+    
+    Returns:
+        Shipment record dict with fields:
+        - shipment_id: Unique shipment identifier
+        - awb_number: Air Waybill number
+        - commodity_type_id: Type of cargo
+        - weight_kg: Shipment weight
+        - value_usd: Shipment value in USD
+        - temperature_requirement: Temperature range if applicable
+        - special_handling_codes: Special handling requirements (PER, DGR, AVI, etc.)
+        - shipper_id: Shipper identifier
+        - consignee_id: Consignee identifier
+        - origin_airport: Origin airport code
+        - destination_airport: Destination airport code
+        Returns None if shipment not found
+    
+    Example:
+        >>> shipment = query_shipment_details("SHP-12345")
+        >>> print(f"AWB: {shipment['awb_number']}, Value: ${shipment['value_usd']}")
+        AWB: 607-12345678, Value: $125000
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        shipments_table = dynamodb.Table(CARGO_SHIPMENTS_TABLE)
+        
+        logger.info(f"Querying shipment details: {shipment_id}")
+        
+        response = shipments_table.get_item(
+            Key={"shipment_id": shipment_id}
+        )
+        
+        item = response.get("Item")
+        if item:
+            logger.info(f"Found shipment: {shipment_id}")
+            return item
+        else:
+            logger.warning(f"Shipment not found: {shipment_id}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying shipment details: {e}")
+        return None
+
+
+@tool
+def query_shipment_by_awb(awb_number: str) -> Optional[Dict[str, Any]]:
+    """Query shipment by Air Waybill (AWB) number.
+    
+    This tool searches for a shipment using its AWB number. AWB format is
+    typically airline prefix (3 digits) + serial number (8 digits).
+    
+    Args:
+        awb_number: Air Waybill number (e.g., 607-12345678)
+    
+    Returns:
+        Shipment record dict (same fields as query_shipment_details)
+        Returns None if shipment not found
+    
+    Example:
+        >>> shipment = query_shipment_by_awb("607-12345678")
+        >>> print(f"Shipment ID: {shipment['shipment_id']}")
+        Shipment ID: SHP-12345
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        shipments_table = dynamodb.Table(CARGO_SHIPMENTS_TABLE)
+        
+        logger.info(f"Querying shipment by AWB: {awb_number}")
+        
+        # Scan for AWB (in production, this should use a GSI)
+        response = shipments_table.scan(
+            FilterExpression="awb_number = :awb",
+            ExpressionAttributeValues={
+                ":awb": awb_number,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found shipment with AWB {awb_number}: {items[0].get('shipment_id')}")
+            return items[0]
+        else:
+            logger.warning(f"Shipment not found with AWB: {awb_number}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error querying shipment by AWB: {e}")
+        return None
 
 # System Prompt for Cargo Agent (from agents_old - UNCHANGED)
 SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
@@ -874,49 +1104,132 @@ When analyzing cargo impact for a disruption, follow this **comprehensive 15-ste
 
 async def analyze_cargo(payload: dict, llm: Any, mcp_tools: list) -> dict:
     """
-    Cargo agent analysis function with database integration and structured output.
+    Cargo agent analysis function with structured output and DynamoDB tools.
     
-    Accepts natural language prompts and uses database tools to extract required information.
+    This agent:
+    1. Uses LangChain structured output to extract flight info from natural language
+    2. Defines its own DynamoDB query tools for authorized tables
+    3. Queries cargo manifest and shipment details
+    4. Analyzes cargo impact including cold chain, perishables, and high-value cargo
+    
+    Args:
+        payload: Request payload containing:
+            - user_prompt: Natural language prompt with flight and disruption info
+            - phase: "initial" or "revision"
+            - other_recommendations: Other agents' recommendations (revision phase only)
+        llm: Bedrock model instance (ChatBedrock)
+        mcp_tools: MCP tools for additional capabilities
+    
+    Returns:
+        Structured cargo assessment with cargo risk score, financial exposure,
+        and recommendations
     """
     try:
-        # Get database tools
-        db_tools = get_cargo_tools()
-
-        # Create agent with structured output
+        user_prompt = payload.get("user_prompt", payload.get("prompt", ""))
+        phase = payload.get("phase", "initial")
+        
+        if not user_prompt:
+            return {
+                "agent": "cargo",
+                "category": "business",
+                "assessment": "CANNOT_PROCEED",
+                "status": "FAILURE",
+                "failure_reason": "No user prompt provided",
+                "recommendations": ["Please provide a disruption description with flight number and date."],
+            }
+        
+        # Step 1: Extract flight information using structured output
+        logger.info("Extracting flight information from natural language prompt")
+        try:
+            structured_llm = llm.with_structured_output(FlightInfo)
+            flight_info = structured_llm.invoke(user_prompt)
+            logger.info(f"Extracted flight info: {flight_info.flight_number} on {flight_info.date}")
+        except Exception as e:
+            logger.error(f"Failed to extract flight information: {e}")
+            return {
+                "agent": "cargo",
+                "category": "business",
+                "assessment": "CANNOT_PROCEED",
+                "status": "FAILURE",
+                "failure_reason": f"Could not extract flight information from prompt: {str(e)}",
+                "missing_data": ["flight_number", "date"],
+                "recommendations": [
+                    "Please provide flight number (e.g., EY123) and date in your prompt.",
+                    "Example: 'Flight EY123 on January 20th had a mechanical failure'"
+                ],
+                "extracted_flight_info": None,
+            }
+        
+        # Step 2: Define cargo-specific DynamoDB tools
+        cargo_tools = [
+            query_flight,
+            query_cargo_manifest,
+            query_shipment_details,
+            query_shipment_by_awb,
+        ]
+        
+        # Step 3: Create agent with all tools
+        all_tools = mcp_tools + cargo_tools
+        
         agent = create_agent(
             model=llm,
-            tools=mcp_tools + db_tools,
+            tools=all_tools,
             response_format=CargoOutput,
         )
+        
+        # Step 4: Build system message with phase-specific instructions
+        if phase == "revision":
+            other_recs = payload.get("other_recommendations", {})
+            system_message = f"""{SYSTEM_PROMPT}
 
-        # Build message
-        prompt = payload.get("prompt", "Analyze this disruption for cargo")
+PHASE: REVISION ROUND
 
-        system_message = f"""{SYSTEM_PROMPT}
+You have already provided an initial cargo assessment. Now review other agents' recommendations and revise your assessment if needed.
 
-IMPORTANT: 
-1. Extract flight and cargo information from the prompt
-2. Use database tools to retrieve cargo manifest and AWB data
-3. Assess cold chain viability and cargo impact
-4. If you cannot extract required information, ask for clarification
-5. If database tools fail, return a FAILURE response
+OTHER AGENTS' RECOMMENDATIONS:
+{other_recs}
 
-Provide analysis using the CargoOutput schema."""
+INSTRUCTIONS:
+1. Review other agents' findings for conflicts or new information
+2. Revise your cargo assessment if warranted
+3. Maintain focus on cargo protection priorities
+4. Use the extracted flight information: {flight_info.model_dump()}
+5. Use database tools to query cargo data if needed
 
-        # Run agent
+Provide your revised analysis using the CargoOutput schema."""
+        else:
+            system_message = f"""{SYSTEM_PROMPT}
+
+PHASE: INITIAL ASSESSMENT
+
+EXTRACTED FLIGHT INFORMATION:
+- Flight Number: {flight_info.flight_number}
+- Date: {flight_info.date}
+- Disruption: {flight_info.disruption_event}
+
+INSTRUCTIONS:
+1. Use query_flight() to retrieve flight details
+2. Use query_cargo_manifest() to get cargo assignments
+3. Use query_shipment_details() to get AWB information
+4. Analyze cold chain viability, perishables, and high-value cargo
+5. Calculate cargo risk score and financial exposure
+6. If database tools fail, return a FAILURE response
+
+Provide your analysis using the CargoOutput schema."""
+        
+        # Step 5: Run agent
+        logger.info(f"Running cargo agent in {phase} phase")
         result = await agent.ainvoke({
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_prompt}
             ]
         })
-
-        # Extract structured output
+        
+        # Step 6: Extract structured output
         final_message = result["messages"][-1]
-
-        if hasattr(final_message, "content") and isinstance(
-            final_message.content, dict
-        ):
+        
+        if hasattr(final_message, "content") and isinstance(final_message.content, dict):
             structured_result = final_message.content
         elif hasattr(final_message, "tool_calls") and final_message.tool_calls:
             structured_result = final_message.tool_calls[0]["args"]
@@ -927,12 +1240,18 @@ Provide analysis using the CargoOutput schema."""
                 "result": str(final_message.content),
                 "status": "success",
             }
-
+        
+        # Step 7: Ensure required fields
+        structured_result["agent"] = "cargo"
         structured_result["category"] = "business"
-        structured_result["status"] = "success"
-
+        # Only set status to success if not already set by agent
+        if "status" not in structured_result:
+            structured_result["status"] = "success"
+        structured_result["extracted_flight_info"] = flight_info.model_dump()
+        
+        logger.info("Cargo agent analysis completed successfully")
         return structured_result
-
+        
     except Exception as e:
         logger.error(f"Error in cargo agent: {e}")
         logger.exception("Full traceback:")

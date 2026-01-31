@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-01-31T21:51:06.214520",
+  "total_tests": 3,
+  "passed": 3,
+  "failed": 0,
+  "tests": {
+    "flights.airport-curfew-index": {
+      "table": "flights",
+      "gsi": "airport-curfew-index",
+      "description": "Curfew compliance checks (Regulatory Agent)",
+      "expected_impact": "20-50x performance improvement",
+      "query_volume": "100+ queries/day",
+      "checks": {
+        "table_exists": true,
+        "gsi_exists": true,
+        "gsi_status": "ACTIVE",
+        "query_success": true,
+        "query_message": "Query successful: 0 items returned",
+        "latency_ms": 857.6890000000001
+      },
+      "status": "WARNING"
+    },
+    "CargoShipments.cargo-temperature-index": {
+      "table": "CargoShipments",
+      "gsi": "cargo-temperature-index",
+      "description": "Cold chain identification (Cargo Agent)",
+      "expected_impact": "20-50x performance improvement",
+      "query_volume": "150+ queries/day",
+      "checks": {
+        "table_exists": true,
+        "gsi_exists": true,
+        "gsi_status": "ACTIVE",
+        "query_success": true,
+        "query_message": "Query successful: 0 items returned",
+        "latency_ms": 195.869
+      },
+      "status": "WARNING"
+    },
+    "MaintenanceWorkOrders.aircraft-maintenance-date-index": {
+      "table": "MaintenanceWorkOrders",
+      "gsi": "aircraft-maintenance-date-index",
+      "description": "Maintenance conflict detection (Maintenance Agent)",
+      "expected_impact": "20-50x performance improvement",
+      "query_volume": "80+ queries/day",
+      "checks": {
+        "table_exists": true,
+        "gsi_exists": true,
+        "gsi_status": "ACTIVE",
+        "query_success": true,
+        "query_message": "Query successful: 0 items returned",
+        "latency_ms": 193.192
+      },
+      "status": "WARNING"
+    }
+  }
+}

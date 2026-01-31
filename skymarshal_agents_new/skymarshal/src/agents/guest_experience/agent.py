@@ -1,13 +1,31 @@
 """Guest Experience Agent for SkyMarshal"""
 
+import boto3
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from database.tools import get_guest_experience_tools
-from agents.schemas import GuestExperienceOutput
+from agents.schemas import GuestExperienceOutput, FlightInfo
+from database.constants import (
+    FLIGHTS_TABLE,
+    BOOKINGS_TABLE,
+    BAGGAGE_TABLE,
+    PASSENGERS_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    FLIGHT_ID_INDEX,
+    BOOKING_INDEX,
+    PASSENGER_FLIGHT_INDEX,
+    FLIGHT_STATUS_INDEX,
+    LOCATION_STATUS_INDEX,
+    PASSENGER_ELITE_TIER_INDEX,
+)
 import logging
-from typing import Any
+from typing import Any, Optional
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
+
+# Initialize DynamoDB resource
+dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 
 # System Prompt for Guest Experience Agent (from agents_old - UNCHANGED)
 SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
@@ -1663,42 +1681,496 @@ When analyzing passenger impact for a disruption, follow this **comprehensive 17
 **Remember**: You are the Guest Experience Agent. Your role is to protect passengers through comprehensive impact assessment, loyalty protection, NPS optimization, and exceptional service recovery. Always identify high-value and vulnerable passengers, predict NPS impact, generate convenient rebooking options, ensure regulatory compliance, and design recovery packages that balance cost with lifetime value protection. Your assessments drive customer satisfaction decisions and must be passenger-centric, empathetic, and financially optimal."""
 
 
-async def analyze_guest_experience(payload: dict, llm: Any, mcp_tools: list) -> dict:
-    """
-    Guest Experience agent analysis function with database integration and structured output.
-    
-    Accepts natural language prompts and uses database tools to extract required information.
+# ============================================================================
+# DynamoDB Query Tools
+# ============================================================================
+#
+# Each agent defines its own DynamoDB query tools directly in its agent.py file
+# using the @tool decorator. There is NO centralized tool factory or shared tool
+# module. Tools are co-located with agent logic for better encapsulation.
+#
+# The @tool decorator is the recommended LangChain pattern for creating tools.
+# It automatically creates Tool objects from functions with type hints and
+# docstrings.
+#
+# Guest Experience Agent is authorized to access:
+# - flights: Flight details and schedules
+# - bookings: Passenger bookings and reservations
+# - Baggage: Baggage tracking and status
+# - passengers: Passenger profiles and loyalty information
+#
+# Guest Experience Agent uses these GSIs:
+# - flight-number-date-index: Query flights by flight number and date
+# - flight-id-index: Query bookings by flight ID
+# - booking-index: Query baggage by booking ID
+# - passenger-flight-index: Query bookings by passenger ID (Priority 1)
+# - flight-status-index: Query bookings by flight and status (Priority 1)
+# - location-status-index: Query baggage by location and status
+# - passenger-elite-tier-index: Query passengers by elite tier (Priority 1)
+# ============================================================================
+
+
+def _convert_decimals(obj):
+    """Convert Decimal objects to float for JSON serialization."""
+    if isinstance(obj, list):
+        return [_convert_decimals(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: _convert_decimals(value) for key, value in obj.items()}
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
+
+@tool
+def query_flight(flight_number: str, date: str) -> Optional[dict]:
+    """Query flight by flight number and date using GSI.
+
+    This tool retrieves flight details including aircraft registration, departure/arrival
+    times, and flight status. Use this as the first step to get the flight_id for
+    subsequent queries.
+
+    Args:
+        flight_number: Flight number (e.g., EY123)
+        date: Flight date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        Flight record dict with flight_id, aircraft_registration, scheduled times, etc.
+        Returns None if flight not found.
+
+    Example:
+        >>> flight = query_flight("EY123", "2026-01-20")
+        >>> if flight:
+        ...     print(f"Flight ID: {flight['flight_id']}")
+        ...     print(f"Aircraft: {flight['aircraft_registration']}")
     """
     try:
-        # Get database tools
-        db_tools = get_guest_experience_tools()
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={":fn": flight_number, ":sd": date},
+        )
+
+        items = response.get("Items", [])
+        if items:
+            result = _convert_decimals(items[0])
+            logger.info(
+                f"Found flight {flight_number} on {date}: flight_id={result.get('flight_id')}"
+            )
+            return result
+        else:
+            logger.warning(f"Flight {flight_number} on {date} not found")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error querying flight {flight_number} on {date}: {e}")
+        return None
+
+
+@tool
+def query_bookings_by_flight(flight_id: str) -> list:
+    """Query all passenger bookings for a flight using GSI.
+
+    This tool retrieves all passenger bookings for a specific flight, including
+    passenger IDs, booking status, cabin class, and booking references.
+
+    Args:
+        flight_id: Unique flight identifier
+
+    Returns:
+        List of booking records with passenger_id, booking_status, cabin_class, etc.
+        Returns empty list if no bookings found.
+
+    Example:
+        >>> bookings = query_bookings_by_flight("EY123-20260120")
+        >>> print(f"Total passengers: {len(bookings)}")
+        >>> elite_passengers = [b for b in bookings if b.get('frequent_flyer_tier')]
+    """
+    try:
+        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+
+        response = bookings_table.query(
+            IndexName=FLIGHT_ID_INDEX,
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={":fid": flight_id},
+        )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(f"Found {len(items)} bookings for flight {flight_id}")
+        return items
+
+    except Exception as e:
+        logger.error(f"Error querying bookings for flight {flight_id}: {e}")
+        return []
+
+
+@tool
+def query_bookings_by_passenger(passenger_id: str, flight_id: Optional[str] = None) -> list:
+    """Query passenger bookings by passenger ID using GSI (Priority 1).
+
+    This tool retrieves booking history for a specific passenger, optionally filtered
+    by flight ID. Useful for identifying frequent flyers and booking patterns.
+
+    Args:
+        passenger_id: Unique passenger identifier
+        flight_id: Optional flight ID to filter bookings
+
+    Returns:
+        List of booking records for the passenger.
+        Returns empty list if no bookings found.
+
+    Example:
+        >>> bookings = query_bookings_by_passenger("PAX12345")
+        >>> print(f"Passenger has {len(bookings)} bookings")
+    """
+    try:
+        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+
+        if flight_id:
+            response = bookings_table.query(
+                IndexName=PASSENGER_FLIGHT_INDEX,
+                KeyConditionExpression="passenger_id = :pid AND flight_id = :fid",
+                ExpressionAttributeValues={":pid": passenger_id, ":fid": flight_id},
+            )
+        else:
+            response = bookings_table.query(
+                IndexName=PASSENGER_FLIGHT_INDEX,
+                KeyConditionExpression="passenger_id = :pid",
+                ExpressionAttributeValues={":pid": passenger_id},
+            )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(f"Found {len(items)} bookings for passenger {passenger_id}")
+        return items
+
+    except Exception as e:
+        logger.error(f"Error querying bookings for passenger {passenger_id}: {e}")
+        return []
+
+
+@tool
+def query_bookings_by_status(flight_id: str, booking_status: str) -> list:
+    """Query bookings by flight and status using GSI (Priority 1).
+
+    This tool retrieves bookings filtered by status (e.g., confirmed, cancelled, standby).
+    Useful for generating passenger manifests and identifying affected passengers.
+
+    Args:
+        flight_id: Unique flight identifier
+        booking_status: Booking status (e.g., "confirmed", "cancelled", "standby")
+
+    Returns:
+        List of booking records matching the status.
+        Returns empty list if no bookings found.
+
+    Example:
+        >>> confirmed = query_bookings_by_status("EY123-20260120", "confirmed")
+        >>> print(f"Confirmed passengers: {len(confirmed)}")
+    """
+    try:
+        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+
+        response = bookings_table.query(
+            IndexName=FLIGHT_STATUS_INDEX,
+            KeyConditionExpression="flight_id = :fid AND booking_status = :status",
+            ExpressionAttributeValues={":fid": flight_id, ":status": booking_status},
+        )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(
+            f"Found {len(items)} {booking_status} bookings for flight {flight_id}"
+        )
+        return items
+
+    except Exception as e:
+        logger.error(
+            f"Error querying {booking_status} bookings for flight {flight_id}: {e}"
+        )
+        return []
+
+
+@tool
+def query_baggage_by_booking(booking_id: str) -> list:
+    """Query baggage by booking ID using GSI.
+
+    This tool retrieves all baggage records for a specific booking, including
+    baggage tags, current location, and status.
+
+    Args:
+        booking_id: Unique booking identifier
+
+    Returns:
+        List of baggage records with baggage_tag, current_location, baggage_status, etc.
+        Returns empty list if no baggage found.
+
+    Example:
+        >>> baggage = query_baggage_by_booking("BKG12345")
+        >>> for bag in baggage:
+        ...     print(f"Tag: {bag['baggage_tag']}, Status: {bag['baggage_status']}")
+    """
+    try:
+        baggage_table = dynamodb.Table(BAGGAGE_TABLE)
+
+        response = baggage_table.query(
+            IndexName=BOOKING_INDEX,
+            KeyConditionExpression="booking_id = :bid",
+            ExpressionAttributeValues={":bid": booking_id},
+        )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(f"Found {len(items)} baggage items for booking {booking_id}")
+        return items
+
+    except Exception as e:
+        logger.error(f"Error querying baggage for booking {booking_id}: {e}")
+        return []
+
+
+@tool
+def query_baggage_by_location(current_location: str, baggage_status: Optional[str] = None) -> list:
+    """Query baggage by location and status using GSI.
+
+    This tool retrieves baggage at a specific location, optionally filtered by status.
+    Useful for tracking mishandled baggage and location-based queries.
+
+    Args:
+        current_location: Airport code or location identifier
+        baggage_status: Optional status filter (e.g., "checked", "loaded", "mishandled")
+
+    Returns:
+        List of baggage records at the location.
+        Returns empty list if no baggage found.
+
+    Example:
+        >>> mishandled = query_baggage_by_location("LHR", "mishandled")
+        >>> print(f"Mishandled bags at LHR: {len(mishandled)}")
+    """
+    try:
+        baggage_table = dynamodb.Table(BAGGAGE_TABLE)
+
+        if baggage_status:
+            response = baggage_table.query(
+                IndexName=LOCATION_STATUS_INDEX,
+                KeyConditionExpression="current_location = :loc AND baggage_status = :status",
+                ExpressionAttributeValues={
+                    ":loc": current_location,
+                    ":status": baggage_status,
+                },
+            )
+        else:
+            response = baggage_table.query(
+                IndexName=LOCATION_STATUS_INDEX,
+                KeyConditionExpression="current_location = :loc",
+                ExpressionAttributeValues={":loc": current_location},
+            )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(
+            f"Found {len(items)} baggage items at {current_location}"
+            + (f" with status {baggage_status}" if baggage_status else "")
+        )
+        return items
+
+    except Exception as e:
+        logger.error(f"Error querying baggage at {current_location}: {e}")
+        return []
+
+
+@tool
+def query_passenger(passenger_id: str) -> Optional[dict]:
+    """Query passenger details by passenger ID.
+
+    This tool retrieves passenger profile information including name, contact details,
+    frequent flyer status, and loyalty tier.
+
+    Args:
+        passenger_id: Unique passenger identifier
+
+    Returns:
+        Passenger record dict with name, email, phone, frequent_flyer_tier, etc.
+        Returns None if passenger not found.
+
+    Example:
+        >>> passenger = query_passenger("PAX12345")
+        >>> if passenger:
+        ...     print(f"Name: {passenger['passenger_name']}")
+        ...     print(f"Tier: {passenger.get('frequent_flyer_tier', 'Standard')}")
+    """
+    try:
+        passengers_table = dynamodb.Table(PASSENGERS_TABLE)
+
+        response = passengers_table.get_item(Key={"passenger_id": passenger_id})
+
+        item = response.get("Item")
+        if item:
+            result = _convert_decimals(item)
+            logger.info(f"Found passenger {passenger_id}")
+            return result
+        else:
+            logger.warning(f"Passenger {passenger_id} not found")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error querying passenger {passenger_id}: {e}")
+        return None
+
+
+@tool
+def query_elite_passengers(frequent_flyer_tier_id: str, booking_date_from: Optional[str] = None) -> list:
+    """Query passengers by elite tier using GSI (Priority 1).
+
+    This tool retrieves passengers by frequent flyer tier, optionally filtered by
+    booking date. Useful for identifying VIP passengers and elite status holders.
+
+    Args:
+        frequent_flyer_tier_id: Tier identifier (e.g., "SILVER", "GOLD", "PLATINUM", "DIAMOND")
+        booking_date_from: Optional minimum booking date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        List of passenger records with the specified tier.
+        Returns empty list if no passengers found.
+
+    Example:
+        >>> platinum_passengers = query_elite_passengers("PLATINUM")
+        >>> print(f"Platinum elite passengers: {len(platinum_passengers)}")
+    """
+    try:
+        passengers_table = dynamodb.Table(PASSENGERS_TABLE)
+
+        if booking_date_from:
+            response = passengers_table.query(
+                IndexName=PASSENGER_ELITE_TIER_INDEX,
+                KeyConditionExpression="frequent_flyer_tier_id = :tier AND booking_date >= :date",
+                ExpressionAttributeValues={
+                    ":tier": frequent_flyer_tier_id,
+                    ":date": booking_date_from,
+                },
+            )
+        else:
+            response = passengers_table.query(
+                IndexName=PASSENGER_ELITE_TIER_INDEX,
+                KeyConditionExpression="frequent_flyer_tier_id = :tier",
+                ExpressionAttributeValues={":tier": frequent_flyer_tier_id},
+            )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(f"Found {len(items)} passengers with tier {frequent_flyer_tier_id}")
+        return items
+
+    except Exception as e:
+        logger.error(f"Error querying elite passengers with tier {frequent_flyer_tier_id}: {e}")
+        return []
+
+
+async def analyze_guest_experience(payload: dict, llm: Any, mcp_tools: list) -> dict:
+    """
+    Guest Experience agent analysis function with natural language prompt support.
+    
+    This agent:
+    1. Receives natural language prompts from the orchestrator
+    2. Uses LangChain structured output to extract flight information
+    3. Queries DynamoDB using agent-specific tools
+    4. Generates passenger impact assessment and recommendations
+    
+    The agent is responsible for:
+    - Extracting flight number, date, and disruption details from the prompt
+    - Querying passenger bookings and baggage data
+    - Identifying high-value and vulnerable passengers
+    - Predicting NPS impact and defection risk
+    - Generating rebooking options and service recovery recommendations
+    
+    Args:
+        payload: Dict containing:
+            - user_prompt: Natural language disruption description
+            - phase: "initial" or "revision"
+            - other_recommendations: Other agents' recommendations (revision only)
+        llm: Bedrock model instance (ChatBedrock)
+        mcp_tools: MCP tools (if any)
+    
+    Returns:
+        Dict with agent response including recommendation, confidence, reasoning, etc.
+    """
+    try:
+        # Define agent-specific DynamoDB query tools
+        db_tools = [
+            query_flight,
+            query_bookings_by_flight,
+            query_bookings_by_passenger,
+            query_bookings_by_status,
+            query_baggage_by_booking,
+            query_baggage_by_location,
+            query_passenger,
+            query_elite_passengers,
+        ]
+
+        # Combine MCP tools and database tools
+        all_tools = mcp_tools + db_tools
 
         # Create agent with structured output
         agent = create_agent(
             model=llm,
-            tools=mcp_tools + db_tools,
+            tools=all_tools,
             response_format=GuestExperienceOutput,
         )
 
-        # Build message
-        prompt = payload.get("prompt", "Analyze this disruption for guest experience")
+        # Get user prompt from payload
+        user_prompt = payload.get("user_prompt", payload.get("prompt", ""))
+        phase = payload.get("phase", "initial")
+        other_recommendations = payload.get("other_recommendations")
 
-        system_message = f"""{SYSTEM_PROMPT}
+        # Build system message with phase-specific instructions
+        if phase == "revision" and other_recommendations:
+            system_message = f"""{SYSTEM_PROMPT}
 
-IMPORTANT: 
-1. Extract flight and passenger information from the prompt
-2. Use database tools to retrieve passenger manifest and booking data
-3. Assess passenger impact and compensation requirements
-4. If you cannot extract required information, ask for clarification
-5. If database tools fail, return a FAILURE response
+PHASE: REVISION ROUND
 
-Provide analysis using the GuestExperienceOutput schema."""
+You are in the revision phase. Other agents have provided their initial recommendations.
+Review their findings and determine if you need to revise your recommendation.
+
+Other Agents' Recommendations:
+{other_recommendations}
+
+IMPORTANT INSTRUCTIONS:
+1. Use LangChain structured output (with_structured_output) to extract flight information from the prompt
+2. Use the query_flight tool to retrieve flight details using the extracted flight number and date
+3. Use query_bookings_by_flight to get passenger manifest
+4. Use query_passenger to get passenger details and loyalty status
+5. Use query_elite_passengers to identify VIP passengers
+6. Use query_baggage_by_booking to track baggage
+7. Review other agents' recommendations and adjust your analysis if needed
+8. Maintain your domain priorities (passenger experience, loyalty protection)
+9. If you cannot extract required information, return a FAILURE response
+10. If database tools fail, return a FAILURE response with details
+
+Provide your analysis using the GuestExperienceOutput schema."""
+        else:
+            system_message = f"""{SYSTEM_PROMPT}
+
+PHASE: INITIAL RECOMMENDATIONS
+
+You are in the initial phase. Provide your independent assessment of the disruption.
+
+IMPORTANT INSTRUCTIONS:
+1. Use LangChain structured output (with_structured_output) to extract flight information from the prompt
+2. Use the query_flight tool to retrieve flight details using the extracted flight number and date
+3. Use query_bookings_by_flight to get passenger manifest
+4. Use query_passenger to get passenger details and loyalty status
+5. Use query_elite_passengers to identify VIP passengers
+6. Use query_baggage_by_booking to track baggage
+7. Assess passenger impact severity and identify high-value passengers
+8. Predict NPS impact and defection risk
+9. Generate rebooking options and service recovery recommendations
+10. If you cannot extract required information, return a FAILURE response
+11. If database tools fail, return a FAILURE response with details
+
+Provide your analysis using the GuestExperienceOutput schema."""
 
         # Run agent
         result = await agent.ainvoke({
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_prompt}
             ]
         })
 
@@ -1718,9 +2190,14 @@ Provide analysis using the GuestExperienceOutput schema."""
                 "result": str(final_message.content),
                 "status": "success",
             }
+        
+        # Ensure required fields are present
+        structured_result["agent"] = "guest_experience"
         structured_result["category"] = "business"
-        structured_result["status"] = "success"
+        if "status" not in structured_result:
+            structured_result["status"] = "success"
 
+        logger.info(f"Guest Experience agent completed successfully in {phase} phase")
         return structured_result
 
     except Exception as e:

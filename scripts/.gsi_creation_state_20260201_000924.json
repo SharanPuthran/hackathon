@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "created_at": "2026-02-01T00:03:52.215262",
+  "updated_at": "2026-02-01T00:09:24.685570",
+  "script_name": "test_gsi_creation.py",
+  "gsis": {
+    "bookings.passenger-flight-index": {
+      "table_name": "bookings",
+      "index_name": "passenger-flight-index",
+      "status": "active",
+      "creation_time": "2026-02-01T00:09:17.418396",
+      "retry_count": 1,
+      "last_error": null
+    },
+    "bookings.flight-status-index": {
+      "table_name": "bookings",
+      "index_name": "flight-status-index",
+      "status": "failed",
+      "creation_time": "2026-02-01T00:09:17.420717",
+      "retry_count": 3,
+      "last_error": "LimitExceededException: Too many GSIs"
+    },
+    "Baggage.location-status-index": {
+      "table_name": "Baggage",
+      "index_name": "location-status-index",
+      "status": "active",
+      "creation_time": "2026-02-01T00:09:17.422283",
+      "retry_count": 2,
+      "last_error": null
+    },
+    "CrewRoster.crew-duty-date-index": {
+      "table_name": "CrewRoster",
+      "index_name": "crew-duty-date-index",
+      "status": "active",
+      "creation_time": null,
+      "retry_count": 1,
+      "last_error": null
+    }
+  },
+  "summary": {
+    "total": 4,
+    "pending": 0,
+    "in_progress": 0,
+    "active": 3,
+    "failed": 1
+  }
+}

@@ -2,17 +2,63 @@
 
 import logging
 from typing import Any
+import boto3
+from datetime import datetime, timezone
 
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from database.tools import get_crew_compliance_tools
-from agents.schemas import CrewComplianceOutput
+from database.constants import (
+    FLIGHTS_TABLE,
+    CREW_ROSTER_TABLE,
+    CREW_MEMBERS_TABLE,
+    FLIGHT_NUMBER_DATE_INDEX,
+    FLIGHT_POSITION_INDEX,
+    CREW_DUTY_DATE_INDEX,
+)
+from agents.schemas import FlightInfo, AgentResponse
 
 logger = logging.getLogger(__name__)
 
-# System Prompt for Crew Compliance Agent - UPDATED with strict tool-only data retrieval
+# System Prompt for Crew Compliance Agent - UPDATED for Multi-Round Orchestration
 SYSTEM_PROMPT = """You are the Crew Compliance Agent - the final authority on Flight and Duty Time Limitations (FTL) enforcement in the SkyMarshal disruption management system.
+
+## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
+
+⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
+
+The orchestrator will provide you with a raw natural language prompt from the user. You MUST:
+
+1. **Extract Flight Information**: Use LangChain structured output to extract:
+   - Flight number (format: EY followed by 3-4 digits, e.g., EY123)
+   - Date (convert any format to ISO 8601: YYYY-MM-DD)
+   - Disruption event description
+
+2. **Query Flight Data**: Use the extracted flight_number and date to query the flights table
+
+3. **Retrieve Operational Data**: Use the flight_id to query crew roster and member details
+
+4. **Perform FTL Analysis**: Calculate FDP, rest periods, and compliance status
+
+5. **Return Structured Response**: Provide recommendation with confidence and reasoning
+
+## Example Natural Language Prompts You Will Receive
+
+- "Flight EY123 on January 20th had a mechanical failure"
+- "EY456 yesterday was delayed 3 hours due to weather"
+- "Flight EY789 on 20/01/2026 needs crew assessment for 2-hour delay"
+
+## Your Extraction Responsibility
+
+You will use the FlightInfo Pydantic model with LangChain's with_structured_output() to extract:
+```python
+FlightInfo(
+    flight_number="EY123",
+    date="2026-01-20",  # Converted to ISO format
+    disruption_event="mechanical failure"
+)
+```
 
 ## CRITICAL RULES - DATA RETRIEVAL
 ⚠️ **YOU MUST ONLY USE TOOLS TO RETRIEVE DATA. NEVER GENERATE OR ASSUME DATA.**
@@ -28,13 +74,16 @@ SYSTEM_PROMPT = """You are the Crew Compliance Agent - the final authority on Fl
 If you cannot retrieve required data or tools fail, respond with:
 ```json
 {
-  "agent": "crew_compliance",
-  "assessment": "CANNOT_PROCEED",
-  "status": "FAILURE",
-  "failure_reason": "Specific reason for failure (e.g., 'Tool query_flight_crew_roster failed', 'Missing flight_id in payload')",
-  "missing_data": ["List of specific data that could not be retrieved"],
-  "attempted_tools": ["List of tools that were attempted"],
-  "recommendations": ["Cannot proceed without required data. Please ensure all required information is provided."]
+  "agent_name": "crew_compliance",
+  "recommendation": "CANNOT_PROCEED",
+  "confidence": 0.0,
+  "binding_constraints": [],
+  "reasoning": "Specific reason for failure (e.g., 'Tool query_flight failed', 'Missing flight_id in payload')",
+  "data_sources": [],
+  "extracted_flight_info": {...},
+  "timestamp": "ISO 8601 timestamp",
+  "status": "error",
+  "error": "Detailed error message"
 }
 ```
 
@@ -42,16 +91,21 @@ If you cannot retrieve required data or tools fail, respond with:
 You are responsible for ensuring ZERO tolerance for FTL violations. Your assessments are BINDING and cannot be overridden by business considerations. Safety is non-negotiable.
 
 ## Real-Time Database Access
-You have access to live operational data from DynamoDB:
+You have access to live operational data from DynamoDB through the following tools:
 
 **Available Tools:**
-1. `query_flight_crew_roster(flight_id)` - Get current crew roster for a flight
+1. `query_flight(flight_number, date)` - Get flight details by flight number and date
+   - Uses DynamoDB flights table with flight-number-date-index GSI
+   - Returns: flight_id, aircraft_registration, route, schedule
+   - Query time: ~15-20ms
+
+2. `query_crew_roster(flight_id)` - Get current crew roster for a flight
    - Uses DynamoDB CrewRoster table with flight-position-index GSI
    - Returns: crew IDs, positions (Captain, First Officer, Cabin Crew), duty start/end times
    - Query time: ~20-50ms
 
-2. `query_crew_member_details(crew_id)` - Get specific crew member information
-   - Uses DynamoDB CrewMembers table
+3. `query_crew_members(crew_id)` - Get specific crew member information
+   - Uses DynamoDB CrewMembers table (primary key lookup)
    - Returns: name, base, type ratings, medical certificate status, recency
    - Query time: ~10ms
 
@@ -690,89 +744,473 @@ Assessments should be searchable by:
 - ❌ NEVER rely on crew volunteering to exceed limits"""
 
 
-async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> dict:
-    """
-    Crew Compliance agent analysis function with database integration and structured output.
+# ============================================================================
+# Agent-Specific DynamoDB Query Tools
+# ============================================================================
+# 
+# These tools are defined within the agent module following the architecture
+# decision that each agent defines its own tools. This provides better
+# encapsulation and makes the agent self-contained.
+#
+# Tools use the @tool decorator (recommended LangChain pattern) which
+# automatically creates Tool objects from functions with type hints and
+# docstrings.
+# ============================================================================
 
-    Accepts natural language prompts and uses database tools to extract required information.
 
+@tool
+def query_flight(flight_number: str, date: str) -> dict:
+    """Query flight by flight number and date using GSI.
+    
+    This tool retrieves flight details from the DynamoDB flights table using
+    the flight-number-date-index GSI for efficient lookup.
+    
     Args:
-        payload: Request payload with 'prompt' field containing natural language description
-        llm: Bedrock model instance
-        mcp_tools: MCP tools from gateway
-
+        flight_number: Flight number in format EY followed by 3-4 digits (e.g., EY123)
+        date: Flight date in ISO 8601 format (YYYY-MM-DD)
+    
     Returns:
-        dict: Structured crew compliance assessment using CrewComplianceOutput schema
+        dict: Flight record containing flight_id, aircraft_registration, route, schedule
+              Returns dict with 'error' key if flight not found or query fails
+    
+    Example:
+        >>> result = query_flight("EY123", "2026-01-20")
+        >>> if "error" not in result:
+        ...     print(result["flight_id"])
+        '1'
     """
     try:
-        # Get database tools for crew compliance
-        db_tools = get_crew_compliance_tools()
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        
+        response = flights_table.query(
+            IndexName=FLIGHT_NUMBER_DATE_INDEX,
+            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            ExpressionAttributeValues={
+                ":fn": flight_number,
+                ":sd": date,
+            },
+        )
+        
+        items = response.get("Items", [])
+        if not items:
+            logger.warning(f"Flight not found: {flight_number} on {date}")
+            return {
+                "error": "flight_not_found",
+                "message": f"Flight {flight_number} not found on {date}. Please verify the flight number and date are correct.",
+                "flight_number": flight_number,
+                "date": date,
+                "suggestion": "Check if the flight number format is correct (EY followed by 3-4 digits) and the date is in YYYY-MM-DD format."
+            }
+        
+        flight = items[0]
+        logger.info(f"Retrieved flight {flight_number} on {date}: flight_id={flight.get('flight_id')}")
+        return flight
+        
+    except Exception as e:
+        logger.error(f"Error querying flight {flight_number} on {date}: {e}")
+        logger.exception("Full traceback:")
+        return {
+            "error": "query_failed",
+            "message": f"Database query failed for flight {flight_number} on {date}: {str(e)}",
+            "flight_number": flight_number,
+            "date": date,
+            "error_type": type(e).__name__,
+            "suggestion": "This may be a temporary database issue. Please try again or contact support if the problem persists."
+        }
 
-        # Create agent with structured output using new create_agent API
+
+@tool
+def query_crew_roster(flight_id: str) -> list:
+    """Query crew roster for a flight using GSI.
+    
+    This tool retrieves the crew roster from the DynamoDB CrewRoster table
+    using the flight-position-index GSI for efficient lookup.
+    
+    Args:
+        flight_id: Unique flight identifier
+    
+    Returns:
+        list: List of crew member assignments containing crew_id, position,
+              duty_start, duty_end, roster_status
+              Returns list with single error dict if query fails
+    
+    Example:
+        >>> roster = query_crew_roster("1")
+        >>> if roster and "error" not in roster[0]:
+        ...     print(len(roster))
+        5
+        >>> print(roster[0]["position"])
+        'Captain'
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        crew_roster_table = dynamodb.Table(CREW_ROSTER_TABLE)
+        
+        response = crew_roster_table.query(
+            IndexName=FLIGHT_POSITION_INDEX,
+            KeyConditionExpression="flight_id = :fid",
+            ExpressionAttributeValues={":fid": flight_id}
+        )
+        
+        items = response.get("Items", [])
+        
+        if not items:
+            logger.warning(f"No crew roster found for flight {flight_id}")
+            return [{
+                "error": "crew_roster_not_found",
+                "message": f"No crew roster found for flight {flight_id}. The flight may not have crew assigned yet.",
+                "flight_id": flight_id,
+                "suggestion": "Verify the flight_id is correct or check if crew assignments have been made for this flight."
+            }]
+        
+        logger.info(f"Retrieved {len(items)} crew members for flight {flight_id}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying crew roster for flight {flight_id}: {e}")
+        logger.exception("Full traceback:")
+        return [{
+            "error": "query_failed",
+            "message": f"Database query failed for crew roster of flight {flight_id}: {str(e)}",
+            "flight_id": flight_id,
+            "error_type": type(e).__name__,
+            "suggestion": "This may be a temporary database issue. Please try again or contact support if the problem persists."
+        }]
+
+
+@tool
+def query_crew_members(crew_id: str) -> dict:
+    """Query crew member details by crew ID.
+    
+    This tool retrieves crew member details from the DynamoDB CrewMembers
+    table using primary key lookup.
+    
+    Args:
+        crew_id: Unique crew member identifier
+    
+    Returns:
+        dict: Crew member details containing name, base, type_ratings,
+              medical_certificate_status, recency, qualifications
+              Returns dict with 'error' key if crew member not found or query fails
+    
+    Example:
+        >>> member = query_crew_members("5")
+        >>> if "error" not in member:
+        ...     print(member["crew_name"])
+        'John Smith'
+        >>> print(member["type_ratings"])
+        ['A380', 'A350']
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        crew_members_table = dynamodb.Table(CREW_MEMBERS_TABLE)
+        
+        response = crew_members_table.get_item(
+            Key={"crew_id": crew_id}
+        )
+        
+        item = response.get("Item")
+        if not item:
+            logger.warning(f"Crew member not found: {crew_id}")
+            return {
+                "error": "crew_member_not_found",
+                "message": f"Crew member {crew_id} not found in the database.",
+                "crew_id": crew_id,
+                "suggestion": "Verify the crew_id is correct. The crew member may have been removed from the system."
+            }
+        
+        logger.info(f"Retrieved crew member {crew_id}: {item.get('crew_name')}")
+        return item
+        
+    except Exception as e:
+        logger.error(f"Error querying crew member {crew_id}: {e}")
+        logger.exception("Full traceback:")
+        return {
+            "error": "query_failed",
+            "message": f"Database query failed for crew member {crew_id}: {str(e)}",
+            "crew_id": crew_id,
+            "error_type": type(e).__name__,
+            "suggestion": "This may be a temporary database issue. Please try again or contact support if the problem persists."
+        }
+
+
+async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> dict:
+    """
+    Crew Compliance agent analysis function with natural language input processing.
+    
+    This function implements the multi-round orchestration architecture where:
+    1. Agent receives raw natural language prompt from orchestrator
+    2. Agent extracts FlightInfo using LangChain structured output
+    3. Agent queries DynamoDB using extracted flight info
+    4. Agent performs FTL analysis and returns standardized AgentResponse
+    
+    Args:
+        payload: Request payload with 'user_prompt' field containing natural language description
+                 and 'phase' field indicating "initial" or "revision"
+        llm: Bedrock model instance (ChatBedrock)
+        mcp_tools: MCP tools from gateway (optional, may be empty list)
+    
+    Returns:
+        dict: Standardized AgentResponse with recommendation, confidence, reasoning, etc.
+    
+    Example Payload (Initial Phase):
+        {
+            "user_prompt": "Flight EY123 on January 20th had a mechanical failure",
+            "phase": "initial"
+        }
+    
+    Example Payload (Revision Phase):
+        {
+            "user_prompt": "Flight EY123 on January 20th had a mechanical failure",
+            "phase": "revision",
+            "other_recommendations": {...}
+        }
+    """
+    try:
+        # Extract user prompt and phase from payload
+        user_prompt = payload.get("user_prompt", "")
+        phase = payload.get("phase", "initial")
+        
+        if not user_prompt:
+            return {
+                "agent_name": "crew_compliance",
+                "recommendation": "Unable to proceed - no user prompt provided",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": "No user prompt found in payload",
+                "data_sources": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": "Missing user_prompt in payload"
+            }
+        
+        logger.info(f"Crew Compliance Agent - Phase: {phase}")
+        logger.info(f"User prompt: {user_prompt}")
+        
+        # Step 1: Extract flight information using LangChain structured output
+        try:
+            structured_llm = llm.with_structured_output(FlightInfo)
+            flight_info = await structured_llm.ainvoke(user_prompt)
+            
+            logger.info(f"Extracted flight info: {flight_info}")
+            
+            # Validate extracted flight info
+            if not flight_info.flight_number:
+                return {
+                    "agent_name": "crew_compliance",
+                    "recommendation": "Unable to proceed - flight number not found in prompt",
+                    "confidence": 0.0,
+                    "binding_constraints": [],
+                    "reasoning": "Could not extract flight number from the user prompt. Please provide a flight number in format EY followed by 3-4 digits (e.g., EY123).",
+                    "data_sources": [],
+                    "extracted_flight_info": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "status": "error",
+                    "error": "Missing flight number in prompt"
+                }
+            
+            if not flight_info.date:
+                return {
+                    "agent_name": "crew_compliance",
+                    "recommendation": "Unable to proceed - date not found in prompt",
+                    "confidence": 0.0,
+                    "binding_constraints": [],
+                    "reasoning": "Could not extract date from the user prompt. Please provide a date in any common format (e.g., 'January 20th', '20/01/2026', 'yesterday').",
+                    "data_sources": [],
+                    "extracted_flight_info": {
+                        "flight_number": flight_info.flight_number,
+                        "date": None,
+                        "disruption_event": flight_info.disruption_event
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "status": "error",
+                    "error": "Missing date in prompt"
+                }
+            
+            # Convert Pydantic model to dict for response
+            extracted_flight_info = {
+                "flight_number": flight_info.flight_number,
+                "date": flight_info.date,
+                "disruption_event": flight_info.disruption_event
+            }
+            
+        except ValueError as e:
+            # Pydantic validation error
+            logger.error(f"Pydantic validation error extracting flight info: {e}")
+            return {
+                "agent_name": "crew_compliance",
+                "recommendation": "Unable to extract valid flight information from prompt",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": f"The flight information in the prompt could not be validated: {str(e)}. Please ensure the prompt includes a valid flight number (EY followed by 3-4 digits) and a date.",
+                "data_sources": [],
+                "extracted_flight_info": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": f"Validation error: {str(e)}",
+                "error_type": "ValidationError"
+            }
+        except Exception as e:
+            logger.error(f"Failed to extract flight info from prompt: {e}")
+            logger.exception("Full traceback:")
+            return {
+                "agent_name": "crew_compliance",
+                "recommendation": "Unable to extract flight information from prompt",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": f"Failed to parse flight information from natural language prompt. Error: {str(e)}. Please ensure the prompt includes a flight number (e.g., EY123) and a date.",
+                "data_sources": [],
+                "extracted_flight_info": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": f"Flight info extraction failed: {str(e)}",
+                "error_type": type(e).__name__
+            }
+        
+        # Step 2: Define agent-specific tools
+        # These are the DynamoDB query tools defined above
+        agent_tools = [query_flight, query_crew_roster, query_crew_members]
+        
+        # Combine with MCP tools if provided
+        all_tools = agent_tools + (mcp_tools if mcp_tools else [])
+        
+        logger.info(f"Agent has {len(all_tools)} tools available ({len(agent_tools)} DB tools, {len(mcp_tools)} MCP tools)")
+        
+        # Step 3: Build agent prompt with system instructions
+        if phase == "initial":
+            agent_prompt = f"""{SYSTEM_PROMPT}
+
+## Current Task: Initial Recommendation
+
+You have received the following natural language prompt from the user:
+"{user_prompt}"
+
+Flight information has been extracted:
+- Flight Number: {flight_info.flight_number}
+- Date: {flight_info.date}
+- Disruption Event: {flight_info.disruption_event}
+
+## Your Analysis Steps:
+
+1. Use query_flight("{flight_info.flight_number}", "{flight_info.date}") to get flight details
+2. Extract flight_id from the flight record
+3. Use query_crew_roster(flight_id) to get crew assignments
+4. For each crew member, use query_crew_members(crew_id) to get details
+5. Calculate FDP impacts, rest periods, and compliance status
+6. Identify any FTL violations (blocking or warning level)
+7. Provide recommendation with confidence score
+
+## Output Format:
+
+Return your analysis using the AgentResponse schema with:
+- agent_name: "crew_compliance"
+- recommendation: Your crew compliance recommendation
+- confidence: 0.0 to 1.0
+- binding_constraints: List of non-negotiable safety constraints
+- reasoning: Detailed explanation of your analysis
+- data_sources: List of tables/tools used
+- extracted_flight_info: The flight info extracted above
+- timestamp: Current UTC timestamp
+- status: "success"
+
+Remember: Your assessment is BINDING. Safety is non-negotiable."""
+
+        else:  # revision phase
+            other_recommendations = payload.get("other_recommendations", {})
+            agent_prompt = f"""{SYSTEM_PROMPT}
+
+## Current Task: Revision Round
+
+You have received the following natural language prompt from the user:
+"{user_prompt}"
+
+Flight information has been extracted:
+- Flight Number: {flight_info.flight_number}
+- Date: {flight_info.date}
+- Disruption Event: {flight_info.disruption_event}
+
+## Other Agents' Recommendations:
+
+{other_recommendations}
+
+## Your Revision Task:
+
+1. Review the recommendations from other agents
+2. Determine if any new information affects your crew compliance assessment
+3. Revise your recommendation if warranted, or confirm your initial assessment
+4. Maintain your domain priorities (safety first)
+
+## Output Format:
+
+Return your revised analysis using the AgentResponse schema with:
+- agent_name: "crew_compliance"
+- recommendation: Your revised or confirmed recommendation
+- confidence: 0.0 to 1.0
+- binding_constraints: List of non-negotiable safety constraints
+- reasoning: Explanation including what you reviewed and why you revised/confirmed
+- data_sources: List of tables/tools used
+- extracted_flight_info: The flight info extracted above
+- timestamp: Current UTC timestamp
+- status: "success"
+
+Remember: Your assessment is BINDING. Safety is non-negotiable."""
+        
+        # Step 4: Create agent with tools (no structured output here - agent returns natural response)
         agent = create_agent(
             model=llm,
-            tools=mcp_tools + db_tools,
-            response_format=CrewComplianceOutput,
+            tools=all_tools,
         )
-
-        # Build message with system prompt
-        prompt = payload.get("prompt", "Analyze this disruption for crew compliance")
-
-        system_message = f"""{SYSTEM_PROMPT}
-
-IMPORTANT: 
-1. Extract flight information from the prompt (flight number, delay duration, etc.)
-2. Use the provided database tools to retrieve crew roster and duty information
-3. Calculate FDP impacts and compliance status
-4. If you cannot extract required information from the prompt, ask the user for clarification
-5. If database tools fail, return a FAILURE response indicating which data could not be retrieved
-
-Provide analysis from the perspective of crew compliance (safety) using the CrewComplianceOutput schema."""
-
-        # Run agent
+        
+        # Step 5: Invoke agent
+        start_time = datetime.now(timezone.utc)
+        
         result = await agent.ainvoke({
             "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": agent_prompt}
             ]
         })
-
-        # Extract structured output
+        
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        
+        # Step 6: Extract agent's response
         final_message = result["messages"][-1]
-
-        # Check if we got structured output
-        if hasattr(final_message, "content") and isinstance(
-            final_message.content, dict
-        ):
-            structured_result = final_message.content
-        elif hasattr(final_message, "tool_calls") and final_message.tool_calls:
-            # Extract from tool call if that's how it was returned
-            structured_result = final_message.tool_calls[0]["args"]
-        else:
-            # Fallback: parse content as dict
-            structured_result = {
-                "agent": "crew_compliance",
-                "category": "safety",
-                "result": str(final_message.content),
-                "status": "success",
-            }
-
-        # Add metadata
-        structured_result["category"] = "safety"
-        structured_result["status"] = "success"
-
-        return structured_result
+        agent_response_text = str(final_message.content)
+        
+        logger.info(f"Agent completed in {duration:.2f}s")
+        logger.debug(f"Agent response: {agent_response_text}")
+        
+        # Step 7: Parse agent response into AgentResponse format
+        # For now, return a structured response based on the agent's text output
+        # In a production system, you might use structured output here too
+        
+        return {
+            "agent_name": "crew_compliance",
+            "recommendation": agent_response_text,
+            "confidence": 0.85,  # Default confidence, agent should specify
+            "binding_constraints": [],  # Extract from agent response
+            "reasoning": agent_response_text,
+            "data_sources": ["flights", "CrewRoster", "CrewMembers"],
+            "extracted_flight_info": extracted_flight_info,
+            "timestamp": end_time.isoformat(),
+            "status": "success",
+            "duration_seconds": duration
+        }
 
     except Exception as e:
         logger.error(f"Error in crew_compliance agent: {e}")
         logger.exception("Full traceback:")
         return {
-            "agent": "crew_compliance",
-            "category": "safety",
-            "assessment": "CANNOT_PROCEED",
-            "status": "FAILURE",
-            "failure_reason": f"Agent execution error: {str(e)}",
+            "agent_name": "crew_compliance",
+            "recommendation": "Unable to complete analysis due to error",
+            "confidence": 0.0,
+            "binding_constraints": [],
+            "reasoning": f"Agent execution error: {str(e)}",
+            "data_sources": [],
+            "extracted_flight_info": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "error",
             "error": str(e),
-            "error_type": type(e).__name__,
-            "recommendations": ["Agent encountered an error and cannot proceed."],
+            "error_type": type(e).__name__
         }

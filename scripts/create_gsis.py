@@ -18,9 +18,17 @@ import asyncio
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from gsi_retry_utils import RetryConfig, log_retry_attempt, generate_failure_report
 
 # Initialize DynamoDB client
 dynamodb_client = boto3.client('dynamodb')
+
+# Default retry configuration
+DEFAULT_RETRY_CONFIG = RetryConfig(
+    max_attempts=5,
+    backoff_delays=(30, 60, 120, 240, 480),
+    continue_on_failure=True
+)
 
 # New GSI Definitions for Multi-Round Orchestration
 NEW_GSI_DEFINITIONS = {
@@ -165,19 +173,23 @@ def get_attribute_definitions(table_name: str) -> List[Dict]:
         return []
 
 
-async def create_gsi_async(table_name: str, gsi_config: Dict, wait: bool = True, validate: bool = False) -> Tuple[bool, str]:
+async def create_gsi_async(table_name: str, gsi_config: Dict, wait: bool = True, validate: bool = False, retry_config: Optional[RetryConfig] = None) -> Tuple[bool, str]:
     """
-    Create a Global Secondary Index on a DynamoDB table (async).
+    Create a Global Secondary Index on a DynamoDB table (async) with retry logic.
 
     Args:
         table_name: Name of the table
         gsi_config: GSI configuration dictionary
         wait: Whether to wait for GSI to become ACTIVE
         validate: Whether to validate GSI performance
+        retry_config: Retry configuration (uses default if None)
 
     Returns:
         Tuple of (success: bool, message: str)
     """
+    if retry_config is None:
+        retry_config = DEFAULT_RETRY_CONFIG
+    
     index_name = gsi_config['IndexName']
     description = gsi_config.get('Description', '')
 
@@ -185,70 +197,144 @@ async def create_gsi_async(table_name: str, gsi_config: Dict, wait: bool = True,
     if description:
         print(f"    Use case: {description}")
 
-    try:
-        # Check if already exists
-        existing_gsis = get_existing_gsis(table_name)
-        if index_name in existing_gsis:
-            status = existing_gsis[index_name]
-            if status == 'ACTIVE':
-                print(f"    ✓ Already exists and is ACTIVE")
-                if validate:
-                    validate_gsi_performance(table_name, index_name)
-                return (True, f"Already exists and is ACTIVE")
+    retry_history = []
+    
+    for attempt in range(retry_config.max_attempts):
+        try:
+            # Check if already exists
+            existing_gsis = get_existing_gsis(table_name)
+            if index_name in existing_gsis:
+                status = existing_gsis[index_name]
+                if status == 'ACTIVE':
+                    print(f"    ✓ Already exists and is ACTIVE")
+                    if validate:
+                        validate_gsi_performance(table_name, index_name)
+                    return (True, f"Already exists and is ACTIVE")
+                else:
+                    print(f"    ⏳ Already exists with status: {status}")
+                    return (True, f"Already exists with status: {status}")
+
+            # Get existing attribute definitions
+            existing_attrs = get_attribute_definitions(table_name)
+            existing_attr_names = {attr['AttributeName'] for attr in existing_attrs}
+
+            # Merge new attribute definitions with existing ones
+            new_attrs = gsi_config['AttributeDefinitions']
+            for attr in new_attrs:
+                if attr['AttributeName'] not in existing_attr_names:
+                    existing_attrs.append(attr)
+
+            # Create GSI (billing mode is inherited from table)
+            dynamodb_client.update_table(
+                TableName=table_name,
+                AttributeDefinitions=existing_attrs,
+                GlobalSecondaryIndexUpdates=[{
+                    'Create': {
+                        'IndexName': gsi_config['IndexName'],
+                        'KeySchema': gsi_config['KeySchema'],
+                        'Projection': gsi_config['Projection']
+                    }
+                }]
+            )
+
+            # Wait for GSI to become active
+            if wait:
+                if await wait_for_gsi_active(table_name, index_name):
+                    if validate:
+                        validate_gsi_performance(table_name, index_name)
+                    return (True, "Created and ACTIVE")
+                else:
+                    error_msg = "Failed to become ACTIVE"
+                    retry_history.append({
+                        'attempt': attempt + 1,
+                        'timestamp': datetime.now().isoformat(),
+                        'error': error_msg,
+                        'error_type': 'ActivationTimeout'
+                    })
+                    
+                    if attempt < retry_config.max_attempts - 1:
+                        delay = retry_config.backoff_delays[min(attempt, len(retry_config.backoff_delays) - 1)]
+                        log_retry_attempt(index_name, table_name, attempt + 1, retry_config.max_attempts, error_msg, len(retry_history), delay)
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        return (False, error_msg)
             else:
-                print(f"    ⏳ Already exists with status: {status}")
-                return (True, f"Already exists with status: {status}")
+                print(f"    ℹ GSI created, not waiting for backfill")
+                return (True, "Created, not waiting")
 
-        # Get existing attribute definitions
-        existing_attrs = get_attribute_definitions(table_name)
-        existing_attr_names = {attr['AttributeName'] for attr in existing_attrs}
-
-        # Merge new attribute definitions with existing ones
-        new_attrs = gsi_config['AttributeDefinitions']
-        for attr in new_attrs:
-            if attr['AttributeName'] not in existing_attr_names:
-                existing_attrs.append(attr)
-
-        # Create GSI (billing mode is inherited from table)
-        dynamodb_client.update_table(
-            TableName=table_name,
-            AttributeDefinitions=existing_attrs,
-            GlobalSecondaryIndexUpdates=[{
-                'Create': {
-                    'IndexName': gsi_config['IndexName'],
-                    'KeySchema': gsi_config['KeySchema'],
-                    'Projection': gsi_config['Projection']
-                }
-            }]
-        )
-
-        # Wait for GSI to become active
-        if wait:
-            if await wait_for_gsi_active(table_name, index_name):
-                if validate:
-                    validate_gsi_performance(table_name, index_name)
-                return (True, "Created and ACTIVE")
+        except dynamodb_client.exceptions.ResourceInUseException as e:
+            error_msg = f"Table {table_name} is being updated"
+            error_type = 'ResourceInUseException'
+            
+            retry_history.append({
+                'attempt': attempt + 1,
+                'timestamp': datetime.now().isoformat(),
+                'error': error_msg,
+                'error_type': error_type
+            })
+            
+            if attempt < retry_config.max_attempts - 1:
+                # Wait for table availability, retry immediately
+                delay = 0
+                print(f"  ⚠ {error_msg}, retrying immediately...")
+                log_retry_attempt(index_name, table_name, attempt + 1, retry_config.max_attempts, error_msg, len(retry_history), delay)
+                await asyncio.sleep(5)  # Small delay to let table become available
+                continue
             else:
-                return (False, "Failed to become ACTIVE")
-        else:
-            print(f"    ℹ GSI created, not waiting for backfill")
-            return (True, "Created, not waiting")
+                print(f"  ✗ {error_msg} after {retry_config.max_attempts} attempts")
+                return (False, error_msg)
+                
+        except Exception as e:
+            error_msg = str(e)
+            error_type = type(e).__name__
+            
+            # Check for specific error types in message
+            if 'LimitExceededException' in error_msg:
+                error_type = 'LimitExceededException'
+                delay = 300  # 5 minutes
+            elif 'ValidationException' in error_msg and 'attribute' in error_msg.lower():
+                error_type = 'ValidationException'
+                delay = 0  # Retry immediately after merge
+            elif 'ThrottlingException' in error_msg:
+                error_type = 'ThrottlingException'
+                delay = retry_config.backoff_delays[min(attempt, len(retry_config.backoff_delays) - 1)]
+            elif 'InternalServerError' in error_msg:
+                error_type = 'InternalServerError'
+                delay = retry_config.backoff_delays[min(attempt, len(retry_config.backoff_delays) - 1)]
+            elif 'already exists' in error_msg.lower():
+                print(f"  ℹ GSI {index_name} already exists")
+                return (True, "Already exists")
+            else:
+                delay = retry_config.backoff_delays[min(attempt, len(retry_config.backoff_delays) - 1)]
+            
+            retry_history.append({
+                'attempt': attempt + 1,
+                'timestamp': datetime.now().isoformat(),
+                'error': error_msg,
+                'error_type': error_type
+            })
+            
+            if attempt < retry_config.max_attempts - 1:
+                log_retry_attempt(index_name, table_name, attempt + 1, retry_config.max_attempts, error_msg, len(retry_history), delay)
+                print(f"  ⚠ Error: {error_msg}")
+                print(f"  ⏳ Retrying in {delay}s (attempt {attempt + 2}/{retry_config.max_attempts})...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                print(f"  ✗ Error creating GSI after {retry_config.max_attempts} attempts: {error_msg}")
+                
+                # Generate failure report
+                failure_report = generate_failure_report(index_name, table_name, retry_history)
+                print(f"  ℹ Failure report generated for {index_name}")
+                
+                return (False, error_msg)
+    
+    # Should not reach here, but just in case
+    return (False, f"Failed after {retry_config.max_attempts} attempts")
 
-    except dynamodb_client.exceptions.ResourceInUseException:
-        msg = f"Table {table_name} is being updated, please try again later"
-        print(f"  ⚠ {msg}")
-        return (False, msg)
-    except Exception as e:
-        error_msg = str(e)
-        if 'already exists' in error_msg.lower():
-            print(f"  ℹ GSI {index_name} already exists")
-            return (True, "Already exists")
-        else:
-            print(f"  ✗ Error creating GSI: {error_msg}")
-            return (False, error_msg)
 
-
-async def process_table_gsis(table_name: str, gsis: List[Dict], wait: bool = True, validate: bool = False) -> Tuple[int, int]:
+async def process_table_gsis(table_name: str, gsis: List[Dict], wait: bool = True, validate: bool = False, retry_config: Optional[RetryConfig] = None) -> Tuple[int, int]:
     """
     Process all GSIs for a single table concurrently.
 
@@ -257,10 +343,14 @@ async def process_table_gsis(table_name: str, gsis: List[Dict], wait: bool = Tru
         gsis: List of GSI configurations
         wait: Whether to wait for GSIs to become ACTIVE
         validate: Whether to validate GSI performance
+        retry_config: Retry configuration (uses default if None)
 
     Returns:
         Tuple of (created_count, failed_count)
     """
+    if retry_config is None:
+        retry_config = DEFAULT_RETRY_CONFIG
+    
     print(f"{table_name}")
 
     # Check if table exists
@@ -269,22 +359,30 @@ async def process_table_gsis(table_name: str, gsis: List[Dict], wait: bool = Tru
         return (0, len(gsis))
 
     # Create all GSIs for this table concurrently
-    tasks = [create_gsi_async(table_name, gsi_config, wait, validate) for gsi_config in gsis]
+    tasks = [create_gsi_async(table_name, gsi_config, wait, validate, retry_config) for gsi_config in gsis]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     created_count = 0
     failed_count = 0
 
-    for result in results:
+    for i, result in enumerate(results):
         if isinstance(result, Exception):
             print(f"  ✗ Exception: {result}")
             failed_count += 1
+            
+            # Log that we're continuing with remaining GSIs
+            if retry_config.continue_on_failure and i < len(gsis) - 1:
+                print(f"  ℹ Continuing with remaining GSIs...")
         else:
             success, message = result
             if success:
                 created_count += 1
             else:
                 failed_count += 1
+                
+                # Log that we're continuing with remaining GSIs
+                if retry_config.continue_on_failure and i < len(gsis) - 1:
+                    print(f"  ℹ Continuing with remaining GSIs...")
 
     print()
     return (created_count, failed_count)
@@ -470,6 +568,13 @@ Examples:
         help='Validate GSI performance with sample queries'
     )
 
+    parser.add_argument(
+        '--max-attempts',
+        type=int,
+        default=5,
+        help='Maximum number of retry attempts (default: 5)'
+    )
+
     args = parser.parse_args()
 
     # Print header
@@ -565,15 +670,24 @@ Examples:
     total_gsis = sum(len(gsis) for gsis in tables_to_process.values())
 
     print(f"Creating {total_gsis} new GSIs for {len(tables_to_process)} tables (async)...")
+    print(f"Retry configuration: max {args.max_attempts} attempts with exponential backoff")
     print()
 
     start_time = datetime.now()
+
+    # Create retry configuration
+    retry_config = RetryConfig(
+        max_attempts=args.max_attempts,
+        backoff_delays=(30, 60, 120, 240, 480),
+        continue_on_failure=True
+    )
 
     # Run async GSI creation
     created_count, failed_count = asyncio.run(create_all_gsis_async(
         tables_to_process,
         wait=not args.no_wait,
-        validate=args.validate
+        validate=args.validate,
+        retry_config=retry_config
     ))
 
     duration = datetime.now() - start_time
@@ -608,7 +722,7 @@ Examples:
     return 0 if failed_count == 0 else 1
 
 
-async def create_all_gsis_async(tables_to_process: Dict[str, List[Dict]], wait: bool = True, validate: bool = False) -> Tuple[int, int]:
+async def create_all_gsis_async(tables_to_process: Dict[str, List[Dict]], wait: bool = True, validate: bool = False, retry_config: Optional[RetryConfig] = None) -> Tuple[int, int]:
     """
     Create all GSIs across all tables concurrently.
 
@@ -616,13 +730,17 @@ async def create_all_gsis_async(tables_to_process: Dict[str, List[Dict]], wait: 
         tables_to_process: Dictionary of table names to GSI configurations
         wait: Whether to wait for GSIs to become ACTIVE
         validate: Whether to validate GSI performance
+        retry_config: Retry configuration (uses default if None)
 
     Returns:
         Tuple of (total_created_count, total_failed_count)
     """
+    if retry_config is None:
+        retry_config = DEFAULT_RETRY_CONFIG
+    
     # Process all tables concurrently
     tasks = [
-        process_table_gsis(table_name, gsis, wait, validate)
+        process_table_gsis(table_name, gsis, wait, validate, retry_config)
         for table_name, gsis in tables_to_process.items()
     ]
 

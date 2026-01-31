@@ -21,17 +21,22 @@ This document outlines the implementation tasks for the SkyMarshal Multi-Round O
 
 ### Task 1: Create DynamoDB GSIs
 
-**Validates**: Requirements 4.1-4.12
+**Validates**: Requirements 4.1-4.30
 
-Create new Global Secondary Indexes on existing DynamoDB tables to support efficient flight-based queries.
+Create new Global Secondary Indexes on existing DynamoDB tables to support efficient flight-based queries for all agents.
 
 **Subtasks**:
 
-- [x] 1.1 Create script `scripts/create_gsis.py` to add new GSIs
+- [x] 1.1 Create script `scripts/create_gsis.py` to add core GSIs
   - Add `flight-number-date-index` GSI to flights table (PK: flight_number, SK: scheduled_departure)
   - Add `aircraft-registration-index` GSI to flights table (PK: aircraft_registration)
   - Add `flight-id-index` GSI to bookings table (PK: flight_id)
   - Add `aircraft-registration-index` GSI to MaintenanceWorkOrders table (PK: aircraftRegistration)
+  - Add `flight-position-index` GSI to CrewRoster table (PK: flight_id, SK: position)
+  - Add `flight-loading-index` GSI to CargoFlightAssignments table (PK: flight_id, SK: loading_status)
+  - Add `shipment-index` GSI to CargoFlightAssignments table (PK: shipment_id)
+  - Add `booking-index` GSI to Baggage table (PK: booking_id)
+  - Add `workorder-shift-index` GSI to MaintenanceRoster table (PK: workorder_id, SK: shift_start)
 - [x] 1.2 Implement GSI activation wait logic
   - Poll GSI status until ACTIVE
   - Timeout after 10 minutes with clear error message
@@ -39,12 +44,128 @@ Create new Global Secondary Indexes on existing DynamoDB tables to support effic
 - [x] 1.4 Test GSI creation on development environment
 - [x] 1.5 Validate GSI query performance with sample data
 
+**Subtasks - Priority 1 GSIs (Critical)**:
+
+- [x] 1.6 Create script `scripts/create_priority1_gsis.py` for critical missing GSIs
+  - Add `passenger-flight-index` GSI to bookings table (PK: passenger_id, SK: flight_id)
+  - Add `flight-status-index` GSI to bookings table (PK: flight_id, SK: booking_status)
+  - Add `location-status-index` GSI to Baggage table (PK: current_location, SK: baggage_status)
+  - Add `crew-duty-date-index` GSI to CrewRoster table (PK: crew_id, SK: duty_date)
+  - Add `aircraft-rotation-index` GSI to Flights table (PK: aircraft_registration, SK: scheduled_departure)
+  - Add `passenger-elite-tier-index` GSI to Passengers table (PK: frequent_flyer_tier_id, SK: booking_date)
+- [x] 1.7 Validate Priority 1 GSIs with agent query patterns
+  - Test Guest Experience agent passenger booking queries
+  - Test Crew Compliance agent duty history queries
+  - Test Network agent aircraft rotation queries
+  - Measure query latency improvements (target: 50-100x faster)
+- [x] 1.8 Document Priority 1 GSI usage patterns
+  - Create query examples for each GSI
+  - Document expected latency and query volume
+  - Add to agent-specific documentation
+
+**Subtasks - Priority 2 GSIs (High Value)**:
+
+- [x] 1.9 Create script `scripts/create_priority2_gsis.py` for high-value GSIs
+  - Add `airport-curfew-index` GSI to Flights table (PK: destination_airport_id, SK: scheduled_arrival)
+  - Add `cargo-temperature-index` GSI to CargoShipments table (PK: commodity_type_id, SK: temperature_requirement)
+  - Add `aircraft-maintenance-date-index` GSI to MaintenanceWorkOrders table (PK: aircraft_registration, SK: scheduled_date)
+- [x] 1.10 Validate Priority 2 GSIs with agent query patterns
+  - Test Regulatory agent curfew compliance queries
+  - Test Cargo agent cold chain identification queries
+  - Test Maintenance agent conflict detection queries
+  - Measure query latency improvements
+- [x] 1.11 Document Priority 2 GSI usage patterns
+
+**Subtasks - Priority 3 GSIs (Future Enhancement)**:
+
+- [x] 1.12 Create script `scripts/create_priority3_gsis.py` for future enhancements
+  - Add `cargo-value-index` GSI to CargoShipments table (PK: shipment_value DESC)
+  - Add `flight-revenue-index` GSI to Flights table (PK: flight_id, SK: total_revenue)
+  - Add `crew-qualification-index` GSI to CrewMembers table (PK: aircraft_type_id, SK: qualification_expiry)
+  - Add `notam-validity-index` GSI to NOTAMs table (PK: airport_code, SK: notam_start)
+- [x] 1.13 Document Priority 3 GSI usage patterns for future reference
+
+**Subtasks - Retry Logic and Error Handling**:
+
+- [x] 1.14 Implement exponential backoff retry logic in all GSI creation scripts
+  - Add retry decorator with configurable max attempts (default: 5)
+  - Implement exponential backoff: 30s, 60s, 120s, 240s, 480s
+  - Log each retry attempt with failure reason and retry count
+  - Continue with remaining GSIs if one fails after all retries
+- [x] 1.15 Implement error-specific retry strategies
+  - ResourceInUseException: Wait for table availability, retry immediately
+  - LimitExceededException: Wait 5 minutes, retry
+  - ValidationException (attribute conflicts): Merge attribute definitions, retry
+  - ThrottlingException: Exponential backoff, retry
+  - InternalServerError: Exponential backoff, retry
+- [ ] 1.16 Implement GSI activation polling with retry logic
+  - Poll GSI status every 10 seconds
+  - Timeout after 15 minutes (90 attempts)
+  - Retry status query up to 3 times if query fails
+  - Log activation progress with timestamps
+- [x] 1.17 Implement validation query after GSI activation
+  - Perform test query on newly created GSI
+  - Verify query uses GSI (not table scan)
+  - Mark GSI as "ACTIVE but non-functional" if validation fails
+  - Log validation results
+- [x] 1.18 Implement state file for resume capability
+  - Create `.gsi_creation_state.json` to track progress
+  - Record: GSI name, table, status, creation time, retry count
+  - Support resume from last successful GSI
+  - Clean up state file on successful completion
+- [ ] 1.20 Implement rollback with retry logic
+  - Support rollback of partially created GSIs
+  - Retry delete operations up to 3 times
+  - Handle ResourceInUseException during delete
+  - Generate rollback report
+
+**Subtasks - Validation and Monitoring**:
+
+- [ ] 1.21 Create GSI validation script `scripts/validate_gsis.py`
+  - Verify all required GSIs exist and are ACTIVE
+  - Test sample queries use GSIs (no table scans)
+  - Validate GSI key schemas match requirements
+  - Check GSI consumed capacity and throttling
+  - Implement retry logic for validation queries
+- [ ] 1.22 Create GSI performance monitoring dashboard
+  - Track query latency by GSI
+  - Monitor consumed capacity
+  - Alert on throttling events
+  - Track table scan occurrences
+  - Track GSI creation success/failure rates
+- [ ] 1.23 Document GSI maintenance procedures
+  - GSI creation process with retry logic
+  - Rollback procedures
+  - Resume capability usage
+  - Performance tuning guidelines
+  - Troubleshooting guide for common failures
+  - Manual intervention steps for exhausted retries
+
 **Acceptance Criteria**:
 
-- All new GSIs created successfully
-- GSIs reach ACTIVE status
+- All core GSIs created successfully (9 GSIs)
+- All Priority 1 GSIs created successfully (6 GSIs)
+- All Priority 2 GSIs created successfully (3 GSIs)
+- All GSIs reach ACTIVE status
 - Sample queries use GSIs (no table scans)
-- Script includes error handling and rollback
+- Query latency meets targets (<100ms for all queries)
+- Scripts include comprehensive retry logic with exponential backoff
+- Scripts include error-specific retry strategies
+- Scripts include state file for resume capability
+- Scripts include validation queries after GSI activation
+- Scripts generate detailed failure reports
+- Scripts support rollback with retry logic
+- Validation script confirms all GSIs operational
+- Performance monitoring dashboard operational
+- Documentation complete for all GSI usage patterns
+- Documentation includes retry logic and troubleshooting guide
+
+**Performance Targets**:
+
+- Core GSIs: 100% of agent queries use GSIs (no table scans)
+- Priority 1 GSIs: 50-100x latency improvement for affected queries
+- Priority 2 GSIs: 20-50x latency improvement for affected queries
+- Overall: Average query latency <50ms, p99 latency <100ms
 
 ---
 
@@ -279,13 +400,13 @@ Update agent payload schemas to accept natural language prompts instead of struc
 
 **Subtasks**:
 
-- [ ] 9.1 Update `src/agents/schemas.py`
+- [x] 9.1 Update `src/agents/schemas.py`
   - Change `DisruptionPayload` to use `user_prompt: str` instead of structured fields
   - Add `extracted_flight_info` to `AgentResponse` schema
   - Update `Collation` schema if needed
-- [ ] 9.2 Update Pydantic models with proper validation
-- [ ] 9.3 Add schema documentation
-- [ ] 9.4 Create unit tests for schema validation
+- [x] 9.2 Update Pydantic models with proper validation
+- [x] 9.3 Add schema documentation
+- [x] 9.4 Create unit tests for schema validation
 
 **Acceptance Criteria**:
 
@@ -303,25 +424,25 @@ Update crew compliance agent to use LangChain structured output for data extract
 
 **Subtasks**:
 
-- [ ] 10.1 Update `src/agents/crew_compliance/agent.py`
+- [x] 10.1 Update `src/agents/crew_compliance/agent.py`
   - Import FlightInfo Pydantic model
   - Use `llm.with_structured_output(FlightInfo)` to extract flight data from prompt
   - Define agent-specific DynamoDB query tools as LangChain Tool objects
   - Create tools for: query_flight, query_crew_roster, query_crew_members
   - Update system prompt to explain agent's responsibility for extraction
-- [ ] 10.2 Implement DynamoDB query tools
+- [x] 10.2 Implement DynamoDB query tools
   - Use boto3 to query DynamoDB tables
   - Use GSIs from constants module (FLIGHT_NUMBER_DATE_INDEX, FLIGHT_POSITION_INDEX)
   - Only access authorized tables (flights, CrewRoster, CrewMembers)
-- [ ] 10.3 Handle extraction and query errors gracefully
+- [x] 10.3 Handle extraction and query errors gracefully
   - Catch Pydantic validation errors
   - Handle missing flight records
   - Return clear error messages
-- [ ] 10.4 Test with sample natural language prompts
+- [x] 10.4 Test with sample natural language prompts
   - Test various prompt phrasings
   - Test date formats (relative, named, numeric)
   - Test error cases
-- [ ] 10.5 Create unit tests for updated agent
+- [x] 10.5 Create unit tests for updated agent
   - Test structured output extraction
   - Test tool definitions
   - Test table access restrictions
@@ -344,19 +465,19 @@ Update maintenance agent to use LangChain structured output for data extraction 
 
 **Subtasks**:
 
-- [ ] 11.1 Update `src/agents/maintenance/agent.py`
+- [x] 11.1 Update `src/agents/maintenance/agent.py`
   - Import FlightInfo Pydantic model
   - Use `llm.with_structured_output(FlightInfo)` to extract flight data from prompt
   - Define agent-specific DynamoDB query tools as LangChain Tool objects
   - Create tools for: query_flight, query_maintenance_work_orders, query_maintenance_staff, query_maintenance_roster, query_aircraft_availability
   - Update system prompt to explain agent's responsibility for extraction
-- [ ] 11.2 Implement DynamoDB query tools
+- [x] 11.2 Implement DynamoDB query tools
   - Use boto3 to query DynamoDB tables
   - Use GSIs from constants module
   - Only access authorized tables (flights, MaintenanceWorkOrders, MaintenanceStaff, MaintenanceRoster, AircraftAvailability)
-- [ ] 11.3 Handle extraction and query errors gracefully
-- [ ] 11.4 Test with sample natural language prompts
-- [ ] 11.5 Create unit tests for updated agent
+- [x] 11.3 Handle extraction and query errors gracefully
+- [x] 11.4 Test with sample natural language prompts
+- [x] 11.5 Create unit tests for updated agent
 
 **Acceptance Criteria**:
 
@@ -376,19 +497,19 @@ Update regulatory agent to use LangChain structured output for data extraction a
 
 **Subtasks**:
 
-- [ ] 12.1 Update `src/agents/regulatory/agent.py`
+- [x] 12.1 Update `src/agents/regulatory/agent.py`
   - Import FlightInfo Pydantic model
   - Use `llm.with_structured_output(FlightInfo)` to extract flight data from prompt
   - Define agent-specific DynamoDB query tools as LangChain Tool objects
   - Create tools for: query_flight, query_crew_roster, query_maintenance_work_orders, query_weather
   - Update system prompt to explain agent's responsibility for extraction
-- [ ] 12.2 Implement DynamoDB query tools
+- [x] 12.2 Implement DynamoDB query tools
   - Use boto3 to query DynamoDB tables
   - Use GSIs from constants module
   - Only access authorized tables (flights, CrewRoster, MaintenanceWorkOrders, Weather)
-- [ ] 12.3 Handle extraction and query errors gracefully
-- [ ] 12.4 Test with sample natural language prompts
-- [ ] 12.5 Create unit tests for updated agent
+- [x] 12.3 Handle extraction and query errors gracefully
+- [x] 12.4 Test with sample natural language prompts
+- [x] 12.5 Create unit tests for updated agent
 
 **Acceptance Criteria**:
 
@@ -408,24 +529,24 @@ Update all business agents to use LangChain structured output for data extractio
 
 **Subtasks**:
 
-- [ ] 13.1 Update Network Agent (`src/agents/network/agent.py`)
+- [x] 13.1 Update Network Agent (`src/agents/network/agent.py`)
   - Use `llm.with_structured_output(FlightInfo)` for extraction
   - Define DynamoDB query tools for authorized tables (flights, AircraftAvailability)
   - Use GSIs from constants module
-- [ ] 13.2 Update Guest Experience Agent (`src/agents/guest_experience/agent.py`)
+- [x] 13.2 Update Guest Experience Agent (`src/agents/guest_experience/agent.py`)
   - Use `llm.with_structured_output(FlightInfo)` for extraction
   - Define DynamoDB query tools for authorized tables (flights, bookings, Baggage)
   - Use GSIs from constants module
-- [ ] 13.3 Update Cargo Agent (`src/agents/cargo/agent.py`)
+- [x] 13.3 Update Cargo Agent (`src/agents/cargo/agent.py`)
   - Use `llm.with_structured_output(FlightInfo)` for extraction
   - Define DynamoDB query tools for authorized tables (flights, CargoFlightAssignments, CargoShipments)
   - Use GSIs from constants module
-- [ ] 13.4 Update Finance Agent (`src/agents/finance/agent.py`)
+- [x] 13.4 Update Finance Agent (`src/agents/finance/agent.py`)
   - Use `llm.with_structured_output(FlightInfo)` for extraction
   - Define DynamoDB query tools for authorized tables (flights, bookings, CargoFlightAssignments, MaintenanceWorkOrders)
   - Use GSIs from constants module
-- [ ] 13.5 Test all agents with sample natural language prompts
-- [ ] 13.6 Create unit tests for all updated agents
+- [x] 13.5 Test all agents with sample natural language prompts
+- [x] 13.6 Create unit tests for all updated agents
 
 **Acceptance Criteria**:
 
