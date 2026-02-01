@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/api/endpoints.py
+# hypothesis_version: 6.151.4
+
+[400, 404, 500, '/api/health', '/api/select-solution', 'UNKNOWN', '\\b[A-Z]{2}\\d{3,4}\\b', 'aircraft', 'confidence', 'conflict_resolutions', 'conflicts_identified', 'crew', 'curfew', 'disruption_id', 'duty', 'fdp', 'final_decision', 'healthy', 'maintenance', 'mechanical', 'medium', 'other', 'partial_success', 'regulatory', 'safety_overrides', 'slot', 'solution_count', 'status', 'success', 'timestamp', 'weather']

@@ -566,16 +566,16 @@ Update all agents to support revision round where they review other agents' reco
 
 **Subtasks**:
 
-- [ ] 14.1 Update all agent implementations
+- [x] 14.1 Update all agent implementations
   - Check payload.phase to determine initial vs revision
   - In revision phase, receive other_recommendations
   - Review other agents' findings
   - Revise own recommendation if warranted
   - Maintain domain priorities
-- [ ] 14.2 Update system prompts to explain revision process
-- [ ] 14.3 Add logic to determine if revision is needed
-- [ ] 14.4 Test revision logic with mock collations
-- [ ] 14.5 Create unit tests for revision behavior
+- [x] 14.2 Update system prompts to explain revision process
+- [x] 14.3 Add logic to determine if revision is needed
+- [x] 14.4 Test revision logic with mock collations
+- [x] 14.5 Create unit tests for revision behavior
 
 **Acceptance Criteria**:
 
@@ -596,30 +596,30 @@ Create a new arbitrator agent using Claude Opus 4.5 for sophisticated conflict r
 
 **Subtasks**:
 
-- [ ] 15.1 Create `src/agents/arbitrator/` directory
-- [ ] 15.2 Create `src/agents/arbitrator/agent.py`
+- [x] 15.1 Create `src/agents/arbitrator/` directory
+- [x] 15.2 Create `src/agents/arbitrator/agent.py`
   - Implement `arbitrate()` function
   - Use Claude Opus 4.5 with cross-region inference
   - Implement conflict identification logic
   - Implement safety priority enforcement
   - Implement conservative decision selection for safety conflicts
-- [ ] 15.3 Implement AWS service discovery for Opus 4.5 endpoint
+- [x] 15.3 Implement AWS service discovery for Opus 4.5 endpoint
   - Use boto3 to discover cross-region inference endpoint
   - Fallback to Sonnet if Opus unavailable
   - Log warning on fallback
-- [ ] 15.4 Create structured input/output schemas
+- [x] 15.4 Create structured input/output schemas
   - Define `ArbitratorInput` schema
   - Define `ArbitratorOutput` schema with all required fields
   - Use Pydantic for validation
-- [ ] 15.5 Implement arbitration logic
+- [x] 15.5 Implement arbitration logic
   - Identify conflicts between agent recommendations
   - Extract binding constraints from safety agents
   - Apply safety-first decision rules
   - Generate justification and reasoning
-- [ ] 15.6 Create comprehensive system prompt for arbitrator
-- [ ] 15.7 Create unit tests for arbitrator
-- [ ] 15.8 Write property-based test for safety priority (Property 8)
-- [ ] 15.9 Write property-based test for conservative resolution (Property 9)
+- [x] 15.6 Create comprehensive system prompt for arbitrator
+- [x] 15.7 Create unit tests for arbitrator
+- [x] 15.8 Write property-based test for safety priority (Property 8)
+- [x] 15.9 Write property-based test for conservative resolution (Property 9)
 
 **Acceptance Criteria**:
 

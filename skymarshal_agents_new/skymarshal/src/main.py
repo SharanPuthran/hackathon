@@ -17,6 +17,7 @@ from agents import (
     analyze_network,
     analyze_regulatory,
 )
+from agents.arbitrator import arbitrate
 from agents.schemas import AgentResponse, Collation
 from mcp_client.client import get_streamable_http_mcp_client
 from model.load import load_model
@@ -426,38 +427,58 @@ async def phase3_arbitration(revised_collation: Collation, llm: Any) -> dict:
     """
     logger.info("⚖️  Phase 3: Arbitration")
     
-    # TODO: Implement arbitrator agent (Task 15)
-    # For now, return a placeholder response
     phase_start = datetime.now()
     
-    logger.warning("   ⚠️  Arbitrator not yet implemented - returning placeholder")
-    
-    # Extract all recommendations for placeholder
-    recommendations = []
-    for agent_name, response in revised_collation.responses.items():
-        if response.status == "success":
-            rec = response.recommendation
-            recommendations.append(f"{agent_name}: {rec}")
-    
-    phase_duration = (datetime.now() - phase_start).total_seconds()
-    
-    placeholder_decision = {
-        "phase": "arbitration",
-        "final_decision": "Arbitrator not yet implemented - see individual agent recommendations",
-        "recommendations": recommendations,
-        "conflicts_identified": [],
-        "conflict_resolutions": [],
-        "safety_overrides": [],
-        "justification": "Arbitrator implementation pending (Task 15)",
-        "reasoning": "Returning all agent recommendations without conflict resolution",
-        "confidence": 0.0,
-        "timestamp": datetime.now().isoformat(),
-        "duration_seconds": phase_duration
-    }
-    
-    logger.info(f"   Phase 3 completed in {phase_duration:.2f}s")
-    
-    return placeholder_decision
+    try:
+        # Call arbitrator with revised collation
+        # Note: arbitrator will load Opus 4.5 model internally if llm is None
+        logger.info("   Invoking arbitrator with revised recommendations")
+        result = await arbitrate(revised_collation, llm_opus=None)
+        
+        # Add phase metadata
+        result["phase"] = "arbitration"
+        
+        phase_duration = (datetime.now() - phase_start).total_seconds()
+        result["duration_seconds"] = phase_duration
+        
+        logger.info(f"   Phase 3 completed in {phase_duration:.2f}s")
+        logger.info(f"   Conflicts identified: {len(result.get('conflicts_identified', []))}")
+        logger.info(f"   Confidence: {result.get('confidence', 0.0):.2f}")
+        
+        return result
+        
+    except Exception as e:
+        # Fallback to conservative decision on error
+        logger.error(f"   ❌ Arbitration failed: {e}")
+        logger.exception("   Full traceback:")
+        
+        phase_duration = (datetime.now() - phase_start).total_seconds()
+        
+        # Extract all recommendations for fallback
+        recommendations = []
+        for agent_name, response in revised_collation.responses.items():
+            if response.status == "success":
+                rec = response.recommendation
+                recommendations.append(f"{agent_name}: {rec}")
+        
+        fallback_decision = {
+            "phase": "arbitration",
+            "final_decision": "Arbitration failed - manual review required. Apply most conservative safety recommendations.",
+            "recommendations": recommendations,
+            "conflicts_identified": [],
+            "conflict_resolutions": [],
+            "safety_overrides": [],
+            "justification": f"Arbitration system error: {str(e)}. Defaulting to conservative approach.",
+            "reasoning": "Fallback to conservative decision due to arbitration failure",
+            "confidence": 0.0,
+            "timestamp": datetime.now().isoformat(),
+            "duration_seconds": phase_duration,
+            "error": str(e)
+        }
+        
+        logger.info(f"   Phase 3 completed (fallback) in {phase_duration:.2f}s")
+        
+        return fallback_decision
 
 
 async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict:

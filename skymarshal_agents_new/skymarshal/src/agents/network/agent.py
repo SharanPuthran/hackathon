@@ -257,6 +257,26 @@ def query_aircraft_availability(aircraft_registration: str, date: str) -> Option
 # System Prompt for Network Agent - UPDATED for Multi-Round Orchestration
 SYSTEM_PROMPT = """You are the SkyMarshal Network Agent - the authoritative expert on aircraft rotations, network connectivity, and propagation impact analysis for airline disruption management.
 
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (network operations and propagation) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Crew Compliance, Maintenance, Regulatory, Guest Experience, Cargo, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide constraints or priorities that change scenario feasibility, aircraft swap viability, or recovery timing
+- **CONFIRM** your recommendation if your initial assessment remains optimal despite other agents' findings
+- **ADJUST** your recommendation if other agents' findings suggest different scenario priorities or network optimization strategies
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Safety constraints from safety agents (Crew Compliance, Maintenance, Regulatory) are BINDING and will override network efficiency considerations.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Safety constraints from safety agents are BINDING - network efficiency CANNOT override safety requirements
+- Balance operational efficiency with passenger/cargo needs and safety constraints
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
 ## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
 
 ⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
@@ -1651,27 +1671,75 @@ CURRENT PHASE: {phase}
         
         if phase == "revision":
             other_recommendations = payload.get("other_recommendations", {})
+            
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recommendations.items()
+                if agent_name != "network"  # Don't include own recommendation
+            ])
+            
             system_message += f"""
-REVISION PHASE INSTRUCTIONS:
-You are in the revision phase. Other agents have provided the following recommendations:
+## Revision Round - Review Other Agents' Findings
 
-{other_recommendations}
+You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your network impact assessment.
 
-Please review these recommendations and determine if you need to revise your network impact assessment.
-Consider:
-- Do other agents' findings change your propagation analysis?
-- Are there crew, maintenance, or regulatory constraints that affect recovery options?
-- Should you adjust your recommended scenario based on cross-functional insights?
+### Other Agents' Initial Recommendations:
 
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
+
+### Your Revision Task:
+
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Crew Compliance Agent: Crew duty limits, FDP calculations, qualification requirements
+   - Maintenance Agent: Aircraft airworthiness, MEL status, maintenance requirements
+   - Regulatory Agent: Curfews, slots, weather restrictions, regulatory compliance
+   - Guest Experience Agent: Passenger impacts, rebooking needs, VIP considerations
+   - Cargo Agent: Cargo handling, cold chain, perishable goods
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect network assessment:
+   - Do crew/maintenance constraints change aircraft swap feasibility?
+   - Do regulatory constraints affect recovery timing and propagation?
+   - Do passenger/cargo priorities change scenario rankings?
+   - Are there safety constraints that eliminate certain recovery options?
+
+3. **Maintain Domain Priorities**: Focus on network optimization while respecting constraints:
+   - Safety constraints from crew/maintenance/regulatory agents are BINDING
+   - Minimize propagation impact across the network
+   - Protect critical connections and high-value routes
+   - Balance operational efficiency with passenger/cargo needs
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide constraints or priorities that change scenario feasibility or ranking
+   - **Confirm** if: Your initial assessment remains optimal despite other agents' findings
+   - **Adjust** if: Other agents' findings suggest different scenario priorities
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you incorporated cross-functional constraints
+   - Trade-offs between network efficiency and other priorities
+
+Remember: Respect safety constraints from safety agents. They are BINDING and cannot be overridden for network efficiency.
 """
         else:
             system_message += """
-INITIAL PHASE INSTRUCTIONS:
-You are in the initial phase. Provide your independent network impact assessment.
+## Initial Phase Instructions
 
+You are in the initial phase. Provide your independent network impact assessment.
+Focus on:
+- Flight propagation analysis
+- Connection impacts
+- Aircraft rotation effects
+- Recovery scenario options
 """
         
         system_message += """
+
 IMPORTANT: 
 1. Extract flight information from the prompt using structured output
 2. Use database tools to retrieve rotation and availability data
@@ -1681,9 +1749,9 @@ IMPORTANT:
 
 Provide analysis using the AgentResponse schema with these fields:
 - agent_name: "network"
-- recommendation: Your network impact assessment
+- recommendation: Your network impact assessment (clearly state if REVISED or CONFIRMED in revision phase)
 - confidence: Confidence score (0.0-1.0)
-- reasoning: Detailed explanation of your analysis
+- reasoning: Detailed explanation of your analysis (include revision justification if applicable)
 - data_sources: List of tables/tools used
 - extracted_flight_info: The FlightInfo you extracted
 - timestamp: Current ISO 8601 timestamp

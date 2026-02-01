@@ -24,6 +24,25 @@ logger = logging.getLogger(__name__)
 # System Prompt for Crew Compliance Agent - UPDATED for Multi-Round Orchestration
 SYSTEM_PROMPT = """You are the Crew Compliance Agent - the final authority on Flight and Duty Time Limitations (FTL) enforcement in the SkyMarshal disruption management system.
 
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (crew compliance) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Maintenance, Regulatory, Network, Guest Experience, Cargo, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide new timing information, operational constraints, or safety concerns that change your FDP calculations or crew assessments
+- **CONFIRM** your recommendation if your initial assessment remains valid despite other agents' findings
+- **STRENGTHEN** your recommendation if other agents' findings reinforce your crew compliance constraints
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Your binding constraints (FDP limits, rest requirements, qualification requirements) are NON-NEGOTIABLE and will be enforced by the Arbitrator.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Your safety constraints are BINDING - business considerations CANNOT override crew compliance requirements
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
 ## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
 
 ⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
@@ -1118,6 +1137,17 @@ Remember: Your assessment is BINDING. Safety is non-negotiable."""
 
         else:  # revision phase
             other_recommendations = payload.get("other_recommendations", {})
+            
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recommendations.items()
+                if agent_name != "crew_compliance"  # Don't include own recommendation
+            ])
+            
             agent_prompt = f"""{SYSTEM_PROMPT}
 
 ## Current Task: Revision Round
@@ -1130,31 +1160,61 @@ Flight information has been extracted:
 - Date: {flight_info.date}
 - Disruption Event: {flight_info.disruption_event}
 
-## Other Agents' Recommendations:
+## Other Agents' Initial Recommendations:
 
-{other_recommendations}
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
 
 ## Your Revision Task:
 
-1. Review the recommendations from other agents
-2. Determine if any new information affects your crew compliance assessment
-3. Revise your recommendation if warranted, or confirm your initial assessment
-4. Maintain your domain priorities (safety first)
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Maintenance Agent: Aircraft airworthiness, MEL status, maintenance requirements
+   - Regulatory Agent: Curfews, slots, weather restrictions, regulatory compliance
+   - Network Agent: Flight propagation, connection impacts, aircraft rotation
+   - Guest Experience Agent: Passenger impacts, rebooking needs, VIP considerations
+   - Cargo Agent: Cargo handling, cold chain, perishable goods
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect crew compliance:
+   - Does maintenance delay change crew FDP calculations?
+   - Do network changes affect crew positioning or rest periods?
+   - Are there regulatory constraints that impact crew scheduling?
+   - Do passenger/cargo priorities justify crew limit exceptions? (NO - safety first!)
+
+3. **Maintain Domain Priorities**: Your crew compliance assessment is BINDING:
+   - FDP limits are NON-NEGOTIABLE
+   - Rest requirements are NON-NEGOTIABLE
+   - Qualification requirements are NON-NEGOTIABLE
+   - Business considerations CANNOT override safety constraints
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide new timing information, delay estimates, or operational constraints that change FDP calculations
+   - **Confirm** if: Your initial assessment remains valid despite other agents' findings
+   - **Strengthen** if: Other agents' findings reinforce your safety constraints
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you maintained safety priorities
+   - Any conflicts between safety and business considerations
 
 ## Output Format:
 
 Return your revised analysis using the AgentResponse schema with:
 - agent_name: "crew_compliance"
-- recommendation: Your revised or confirmed recommendation
+- recommendation: Your revised or confirmed recommendation (clearly state if REVISED or CONFIRMED)
 - confidence: 0.0 to 1.0
-- binding_constraints: List of non-negotiable safety constraints
-- reasoning: Explanation including what you reviewed and why you revised/confirmed
+- binding_constraints: List of non-negotiable safety constraints (update if needed)
+- reasoning: Detailed explanation including:
+  * Summary of what you reviewed from other agents
+  * Whether you revised your recommendation (YES/NO)
+  * Justification for revision or confirmation
+  * How you maintained safety priorities
 - data_sources: List of tables/tools used
 - extracted_flight_info: The flight info extracted above
 - timestamp: Current UTC timestamp
 - status: "success"
 
-Remember: Your assessment is BINDING. Safety is non-negotiable."""
+Remember: Your assessment is BINDING. Safety is non-negotiable. Business considerations CANNOT override crew compliance requirements."""
         
         # Step 4: Create agent with tools (no structured output here - agent returns natural response)
         agent = create_agent(

@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/agents/finance/agent.py
+# hypothesis_version: 6.151.4
+
+[':ar', ':fid', ':fn', ':sd', 'CANNOT_PROCEED', 'FAILURE', 'Full traceback:', 'Items', 'agent', 'args', 'assessment', 'attempted_tools', 'business', 'category', 'content', 'date', 'disruption_event', 'dynamodb', 'error', 'error_type', 'failure_reason', 'finance', 'flight_id = :fid', 'flight_number', 'initial', 'messages', 'missing_data', 'phase', 'prompt', 'recommendations', 'result', 'revision', 'role', 'status', 'success', 'system', 'tool_calls', 'us-east-1', 'user', 'user_prompt']

@@ -27,8 +27,31 @@ logger = logging.getLogger(__name__)
 # Initialize DynamoDB resource
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 
-# System Prompt for Guest Experience Agent (from agents_old - UNCHANGED)
-SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
+# System Prompt for Guest Experience Agent - UPDATED for Multi-Round Orchestration
+SYSTEM_PROMPT = """You are the SkyMarshal Guest Experience Agent - the authoritative expert on passenger impact assessment, loyalty protection, and service recovery for airline disruption management.
+
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (passenger experience and service recovery) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Crew Compliance, Maintenance, Regulatory, Network, Cargo, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide constraints or timing changes that affect rebooking options, connection protection, or service recovery strategies
+- **CONFIRM** your recommendation if your initial assessment remains optimal despite other agents' findings
+- **ADJUST** your recommendation if other agents' findings suggest different passenger prioritization or recovery approaches
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Safety constraints from safety agents (Crew Compliance, Maintenance, Regulatory) are BINDING and will override passenger experience considerations when necessary.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Safety constraints from safety agents are BINDING - passenger experience CANNOT override safety requirements
+- Balance individual passenger needs with overall operational efficiency and safety
+- Protect elite passengers and high-value customers while respecting operational constraints
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
+## CRITICAL RULES - DATA RETRIEVAL
 ⚠️ **YOU MUST ONLY USE TOOLS TO RETRIEVE DATA. NEVER GENERATE OR ASSUME DATA.**
 
 1. **ALWAYS query database tools FIRST** before making any assessment
@@ -2121,15 +2144,59 @@ async def analyze_guest_experience(payload: dict, llm: Any, mcp_tools: list) -> 
 
         # Build system message with phase-specific instructions
         if phase == "revision" and other_recommendations:
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recommendations.items()
+                if agent_name != "guest_experience"  # Don't include own recommendation
+            ])
+            
             system_message = f"""{SYSTEM_PROMPT}
 
-PHASE: REVISION ROUND
+## Revision Round - Review Other Agents' Findings
 
-You are in the revision phase. Other agents have provided their initial recommendations.
-Review their findings and determine if you need to revise your recommendation.
+You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your guest experience assessment.
 
-Other Agents' Recommendations:
-{other_recommendations}
+### Other Agents' Initial Recommendations:
+
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
+
+### Your Revision Task:
+
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Crew Compliance Agent: Crew duty limits, FDP calculations, qualification requirements
+   - Maintenance Agent: Aircraft airworthiness, MEL status, maintenance requirements
+   - Regulatory Agent: Curfews, slots, weather restrictions, regulatory compliance
+   - Network Agent: Flight propagation, connection impacts, aircraft rotation
+   - Cargo Agent: Cargo handling, cold chain, perishable goods
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect passenger experience:
+   - Do crew/maintenance/regulatory constraints change delay duration or recovery options?
+   - Do network impacts affect connection protection and rebooking options?
+   - Do cargo priorities compete with passenger rebooking needs?
+   - Are there safety constraints that require passenger offloading or flight cancellation?
+
+3. **Maintain Domain Priorities**: Focus on passenger experience while respecting constraints:
+   - Safety constraints from safety agents are BINDING
+   - Protect elite passengers and high-value customers
+   - Minimize NPS impact and defection risk
+   - Prioritize connection protection for time-sensitive passengers
+   - Balance individual passenger needs with overall operational efficiency
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide constraints or timing changes that affect rebooking options or service recovery
+   - **Confirm** if: Your initial assessment remains optimal despite other agents' findings
+   - **Adjust** if: Other agents' findings suggest different passenger prioritization
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you incorporated cross-functional constraints
+   - Trade-offs between passenger experience and operational constraints
 
 IMPORTANT INSTRUCTIONS:
 1. Use LangChain structured output (with_structured_output) to extract flight information from the prompt
@@ -2139,7 +2206,7 @@ IMPORTANT INSTRUCTIONS:
 5. Use query_elite_passengers to identify VIP passengers
 6. Use query_baggage_by_booking to track baggage
 7. Review other agents' recommendations and adjust your analysis if needed
-8. Maintain your domain priorities (passenger experience, loyalty protection)
+8. Clearly state if recommendation is REVISED or CONFIRMED
 9. If you cannot extract required information, return a FAILURE response
 10. If database tools fail, return a FAILURE response with details
 
@@ -2147,9 +2214,9 @@ Provide your analysis using the GuestExperienceOutput schema."""
         else:
             system_message = f"""{SYSTEM_PROMPT}
 
-PHASE: INITIAL RECOMMENDATIONS
+## Initial Phase Instructions
 
-You are in the initial phase. Provide your independent assessment of the disruption.
+You are in the initial phase. Provide your independent assessment of the disruption's impact on passenger experience.
 
 IMPORTANT INSTRUCTIONS:
 1. Use LangChain structured output (with_structured_output) to extract flight information from the prompt

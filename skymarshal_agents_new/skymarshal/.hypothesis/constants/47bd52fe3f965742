@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/agents/cargo/agent.py
+# hypothesis_version: 6.151.4
+
+[':awb', ':fid', ':fn', ':sd', 'CANNOT_PROCEED', 'FAILURE', 'Full traceback:', 'Item', 'Items', 'agent', 'args', 'assessment', 'awb_number = :awb', 'business', 'cargo', 'category', 'content', 'date', 'dynamodb', 'error', 'error_type', 'failure_reason', 'flight_id = :fid', 'flight_number', 'initial', 'messages', 'missing_data', 'phase', 'prompt', 'recommendations', 'result', 'revision', 'role', 'shipment_id', 'status', 'success', 'system', 'tool_calls', 'us-east-1', 'user', 'user_prompt']

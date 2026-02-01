@@ -239,8 +239,32 @@ def query_shipment_by_awb(awb_number: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error querying shipment by AWB: {e}")
         return None
 
-# System Prompt for Cargo Agent (from agents_old - UNCHANGED)
-SYSTEM_PROMPT = """## CRITICAL RULES - DATA RETRIEVAL
+# System Prompt for Cargo Agent - UPDATED for Multi-Round Orchestration
+SYSTEM_PROMPT = """You are the SkyMarshal Cargo Agent - the authoritative expert on cargo operations, cold chain management, and freight prioritization for airline disruption management.
+
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (cargo operations and freight management) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Crew Compliance, Maintenance, Regulatory, Network, Guest Experience, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide constraints or timing changes that affect cargo viability, cold chain integrity, or freight handling options
+- **CONFIRM** your recommendation if your initial assessment remains valid despite other agents' findings
+- **ADJUST** your recommendation if other agents' findings suggest different cargo prioritization or handling strategies
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Safety constraints from safety agents (Crew Compliance, Maintenance, Regulatory) are BINDING and will override cargo considerations when necessary.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Safety constraints from safety agents are BINDING - cargo priorities CANNOT override safety requirements
+- Protect cold chain integrity for temperature-sensitive cargo
+- Prioritize perishable goods and time-critical shipments
+- Balance cargo priorities with passenger needs and operational constraints
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
+## CRITICAL RULES - DATA RETRIEVAL
 ⚠️ **YOU MUST ONLY USE TOOLS TO RETRIEVE DATA. NEVER GENERATE OR ASSUME DATA.**
 
 1. **ALWAYS query database tools FIRST** before making any assessment
@@ -1180,27 +1204,80 @@ async def analyze_cargo(payload: dict, llm: Any, mcp_tools: list) -> dict:
         # Step 4: Build system message with phase-specific instructions
         if phase == "revision":
             other_recs = payload.get("other_recommendations", {})
+            
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recs.items()
+                if agent_name != "cargo"  # Don't include own recommendation
+            ])
+            
             system_message = f"""{SYSTEM_PROMPT}
 
-PHASE: REVISION ROUND
+## Revision Round - Review Other Agents' Findings
 
-You have already provided an initial cargo assessment. Now review other agents' recommendations and revise your assessment if needed.
+You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your cargo assessment.
 
-OTHER AGENTS' RECOMMENDATIONS:
-{other_recs}
+### Other Agents' Initial Recommendations:
+
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
+
+### Your Revision Task:
+
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Crew Compliance Agent: Crew duty limits, FDP calculations, qualification requirements
+   - Maintenance Agent: Aircraft airworthiness, MEL status, maintenance requirements
+   - Regulatory Agent: Curfews, slots, weather restrictions, regulatory compliance
+   - Network Agent: Flight propagation, connection impacts, aircraft rotation
+   - Guest Experience Agent: Passenger impacts, rebooking needs, VIP considerations
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect cargo handling:
+   - Do crew/maintenance/regulatory constraints change delay duration or recovery timing?
+   - Do network impacts affect cargo transfer options and onward connections?
+   - Do passenger priorities compete with cargo space or handling resources?
+   - Are there safety constraints that require cargo offloading or special handling?
+
+3. **Maintain Domain Priorities**: Focus on cargo protection while respecting constraints:
+   - Safety constraints from safety agents are BINDING
+   - Protect cold chain integrity for temperature-sensitive cargo
+   - Prioritize perishable goods and time-critical shipments
+   - Minimize financial exposure from high-value cargo
+   - Balance cargo priorities with passenger needs
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide constraints or timing changes that affect cargo viability or handling options
+   - **Confirm** if: Your initial assessment remains valid despite other agents' findings
+   - **Adjust** if: Other agents' findings suggest different cargo prioritization
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you incorporated cross-functional constraints
+   - Trade-offs between cargo protection and operational constraints
+
+EXTRACTED FLIGHT INFORMATION:
+- Flight Number: {flight_info.flight_number}
+- Date: {flight_info.date}
+- Disruption: {flight_info.disruption_event}
 
 INSTRUCTIONS:
 1. Review other agents' findings for conflicts or new information
-2. Revise your cargo assessment if warranted
+2. Revise your cargo assessment if warranted (clearly state REVISED or CONFIRMED)
 3. Maintain focus on cargo protection priorities
-4. Use the extracted flight information: {flight_info.model_dump()}
-5. Use database tools to query cargo data if needed
+4. Use database tools to query cargo data if needed
+5. Respect safety constraints from safety agents
 
 Provide your revised analysis using the CargoOutput schema."""
         else:
             system_message = f"""{SYSTEM_PROMPT}
 
-PHASE: INITIAL ASSESSMENT
+## Initial Phase Instructions
+
+You are in the initial phase. Provide your independent assessment of the disruption's impact on cargo operations.
 
 EXTRACTED FLIGHT INFORMATION:
 - Flight Number: {flight_info.flight_number}

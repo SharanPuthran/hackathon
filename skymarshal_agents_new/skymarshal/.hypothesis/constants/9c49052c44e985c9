@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/agents/regulatory/agent.py
+# hypothesis_version: 6.151.4
+
+[0.0, ':ar', ':fid', ':fn', ':sd', 'CANNOT_PROCEED', 'Direct key lookup', 'Full traceback:', 'Item', 'Items', 'agent', 'agent_name', 'airport_code', 'args', 'assessment', 'binding_constraints', 'category', 'confidence', 'content', 'crew_count', 'data_sources', 'date', 'disruption_event', 'duration_seconds', 'dynamodb', 'error', 'error_type', 'failure_reason', 'flight_details', 'flight_id', 'flight_id = :fid', 'flight_number', 'forecast_time', 'initial', 'messages', 'phase', 'prompt', 'query_method', 'reasoning', 'recommendation', 'recommendations', 'regulatory', 'result', 'revision', 'role', 'roster', 'safety', 'start_time', 'status', 'success', 'system', 'table', 'timestamp', 'tool_calls', 'us-east-1', 'user', 'user_prompt', 'weather', 'workorder_count', 'workorders']

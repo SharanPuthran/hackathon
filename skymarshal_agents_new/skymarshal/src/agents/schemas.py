@@ -1219,3 +1219,1304 @@ class Collation(BaseModel):
             status = response.status or "success"
             counts[status] = counts.get(status, 0) + 1
         return counts
+
+
+# ============================================================================
+# Arbitrator Schemas
+# ============================================================================
+#
+# These schemas define the input and output for the arbitrator agent in
+# Phase 3 of the multi-round orchestration flow. The arbitrator receives
+# all revised agent recommendations and makes the final decision by:
+#
+# 1. Identifying conflicts between agent recommendations
+# 2. Extracting binding constraints from safety agents
+# 3. Applying safety-first decision rules
+# 4. Generating final decision with justification
+# 5. Providing complete audit trail
+#
+# Decision Rules:
+# ---------------
+# 1. Safety vs Business: Always choose safety constraint
+# 2. Safety vs Safety: Choose most conservative option
+# 3. Business vs Business: Balance operational impact
+#
+# Usage Pattern:
+# --------------
+# 1. Orchestrator creates ArbitratorInput with revised recommendations
+# 2. Arbitrator analyzes conflicts and applies decision rules
+# 3. Arbitrator returns ArbitratorOutput with final decision
+# 4. System returns final decision to user
+#
+# ============================================================================
+
+
+class ConflictDetail(BaseModel):
+    """
+    Details of a conflict between agent recommendations.
+    
+    This schema captures information about conflicts identified by the
+    arbitrator during Phase 3. Conflicts occur when agents provide
+    contradictory or incompatible recommendations.
+    
+    Attributes:
+        agents_involved: Names of agents involved in the conflict
+        conflict_type: Type of conflict (safety_vs_business, safety_vs_safety, business_vs_business)
+        description: Human-readable description of the conflict
+    
+    Conflict Types:
+        safety_vs_business:
+            - Safety agent's binding constraint conflicts with business recommendation
+            - Example: Crew requires 10-hour rest vs Network wants 2-hour delay
+            - Resolution: Always choose safety constraint
+        
+        safety_vs_safety:
+            - Multiple safety agents have conflicting requirements
+            - Example: Crew can operate with 8-hour rest vs Maintenance requires 12-hour inspection
+            - Resolution: Choose most conservative option
+        
+        business_vs_business:
+            - Business agents have conflicting recommendations
+            - Example: Network wants cancellation vs Guest Experience wants delay
+            - Resolution: Balance operational impact
+    
+    Example:
+        >>> conflict = ConflictDetail(
+        ...     agents_involved=["crew_compliance", "network"],
+        ...     conflict_type="safety_vs_business",
+        ...     description=(
+        ...         "Crew Compliance requires 10-hour rest period, but Network "
+        ...         "recommends 2-hour delay to minimize propagation impact"
+        ...     )
+        ... )
+    
+    See Also:
+        - ResolutionDetail: How the conflict was resolved
+        - SafetyOverride: Safety constraints that overrode business recommendations
+        - ArbitratorOutput: Contains list of ConflictDetail objects
+    """
+    
+    agents_involved: List[str] = Field(
+        description="Names of agents involved in the conflict"
+    )
+    conflict_type: Literal["safety_vs_business", "safety_vs_safety", "business_vs_business"] = Field(
+        description="Type of conflict: safety_vs_business, safety_vs_safety, or business_vs_business"
+    )
+    description: str = Field(
+        description="Human-readable description of the conflict"
+    )
+    
+    @field_validator("agents_involved")
+    @classmethod
+    def validate_agents_involved(cls, v: List[str]) -> List[str]:
+        """
+        Validate at least 2 agents are involved in a conflict.
+        
+        Args:
+            v: List of agent names
+            
+        Returns:
+            Validated list of agent names
+            
+        Raises:
+            ValueError: If fewer than 2 agents are involved
+        """
+        if len(v) < 2:
+            raise ValueError(
+                f"A conflict must involve at least 2 agents, got {len(v)}. "
+                "Conflicts occur between agent recommendations."
+            )
+        
+        return v
+    
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str) -> str:
+        """
+        Validate description is not empty.
+        
+        Args:
+            v: Description string
+            
+        Returns:
+            Validated description
+            
+        Raises:
+            ValueError: If description is empty
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError(
+                "Conflict description cannot be empty. "
+                "Provide a clear explanation of the conflict."
+            )
+        
+        return v
+
+
+class ResolutionDetail(BaseModel):
+    """
+    Details of how a conflict was resolved by the arbitrator.
+    
+    This schema captures the arbitrator's decision-making process for
+    each conflict. It explains what conflict was resolved, how it was
+    resolved, and the rationale behind the resolution.
+    
+    Attributes:
+        conflict_description: Description of the conflict that was resolved
+        resolution: How the conflict was resolved
+        rationale: Reasoning behind the resolution
+    
+    Example (Safety vs Business):
+        >>> resolution = ResolutionDetail(
+        ...     conflict_description=(
+        ...         "Crew Compliance requires 10-hour rest vs Network wants 2-hour delay"
+        ...     ),
+        ...     resolution="Enforce 10-hour crew rest requirement",
+        ...     rationale=(
+        ...         "Safety constraint takes priority over business optimization. "
+        ...         "Crew duty limits are non-negotiable regulatory requirements."
+        ...     )
+        ... )
+    
+    Example (Safety vs Safety):
+        >>> resolution = ResolutionDetail(
+        ...     conflict_description=(
+        ...         "Crew can operate with 8-hour rest vs Maintenance requires 12-hour inspection"
+        ...     ),
+        ...     resolution="Enforce 12-hour maintenance inspection",
+        ...     rationale=(
+        ...         "Choose most conservative option when safety agents conflict. "
+        ...         "12-hour inspection provides higher safety margin."
+        ...     )
+        ... )
+    
+    Example (Business vs Business):
+        >>> resolution = ResolutionDetail(
+        ...     conflict_description=(
+        ...         "Network recommends cancellation vs Guest Experience recommends delay"
+        ...     ),
+        ...     resolution="Delay flight by 4 hours with passenger reprotection",
+        ...     rationale=(
+        ...         "Balance operational impact: delay affects 150 passengers but "
+        ...         "cancellation would affect 3 downstream flights (450 passengers total)"
+        ...     )
+        ... )
+    
+    See Also:
+        - ConflictDetail: Details of the conflict
+        - ArbitratorOutput: Contains list of ResolutionDetail objects
+    """
+    
+    conflict_description: str = Field(
+        description="Description of the conflict that was resolved"
+    )
+    resolution: str = Field(
+        description="How the conflict was resolved"
+    )
+    rationale: str = Field(
+        description="Reasoning behind the resolution"
+    )
+    
+    @field_validator("conflict_description", "resolution", "rationale")
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """
+        Validate field is not empty.
+        
+        Args:
+            v: Field value
+            
+        Returns:
+            Validated field value
+            
+        Raises:
+            ValueError: If field is empty
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError(
+                "Resolution detail fields cannot be empty. "
+                "Provide complete information about conflict resolution."
+            )
+        
+        return v
+
+
+class SafetyOverride(BaseModel):
+    """
+    Details of a safety constraint overriding business recommendations.
+    
+    This schema captures cases where a safety agent's binding constraint
+    takes priority over business agent recommendations. Safety overrides
+    are a critical part of the audit trail and demonstrate safety-first
+    decision making.
+    
+    Attributes:
+        safety_agent: Name of the safety agent providing the constraint
+        binding_constraint: The binding constraint that was enforced
+        overridden_recommendations: Business recommendations that were overridden
+    
+    Safety Agents:
+        - crew_compliance: Crew duty limits, rest requirements, qualifications
+        - maintenance: Aircraft airworthiness, MEL compliance
+        - regulatory: Curfews, slots, regulatory requirements
+    
+    Example:
+        >>> override = SafetyOverride(
+        ...     safety_agent="crew_compliance",
+        ...     binding_constraint="Crew must have minimum 10 hours rest before next duty",
+        ...     overridden_recommendations=[
+        ...         "Network: Delay flight by only 2 hours to minimize propagation",
+        ...         "Finance: Minimize delay costs by reducing rest period"
+        ...     ]
+        ... )
+    
+    Design Rationale:
+        Safety overrides are explicitly tracked to:
+        - Demonstrate compliance with safety-first principles
+        - Provide audit trail for regulatory review
+        - Explain why business-optimal solutions were not chosen
+        - Document non-negotiable safety constraints
+    
+    See Also:
+        - ConflictDetail: Details of the conflict
+        - ResolutionDetail: How the conflict was resolved
+        - ArbitratorOutput: Contains list of SafetyOverride objects
+    """
+    
+    safety_agent: str = Field(
+        description="Name of the safety agent providing the constraint"
+    )
+    binding_constraint: str = Field(
+        description="The binding constraint that was enforced"
+    )
+    overridden_recommendations: List[str] = Field(
+        description="Business recommendations that were overridden"
+    )
+    
+    @field_validator("safety_agent")
+    @classmethod
+    def validate_safety_agent(cls, v: str) -> str:
+        """
+        Validate safety agent is one of the known safety agents.
+        
+        Args:
+            v: Safety agent name
+            
+        Returns:
+            Validated safety agent name
+            
+        Raises:
+            ValueError: If not a safety agent
+        """
+        safety_agents = {"crew_compliance", "maintenance", "regulatory"}
+        v = v.strip().lower()
+        
+        if v not in safety_agents:
+            raise ValueError(
+                f"Invalid safety agent: {v}. "
+                f"Must be one of: {', '.join(sorted(safety_agents))}"
+            )
+        
+        return v
+    
+    @field_validator("binding_constraint")
+    @classmethod
+    def validate_binding_constraint(cls, v: str) -> str:
+        """
+        Validate binding constraint is not empty.
+        
+        Args:
+            v: Binding constraint string
+            
+        Returns:
+            Validated binding constraint
+            
+        Raises:
+            ValueError: If binding constraint is empty
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError(
+                "Binding constraint cannot be empty. "
+                "Provide the specific safety requirement that was enforced."
+            )
+        
+        return v
+    
+    @field_validator("overridden_recommendations")
+    @classmethod
+    def validate_overridden_recommendations(cls, v: List[str]) -> List[str]:
+        """
+        Validate at least one recommendation was overridden.
+        
+        Args:
+            v: List of overridden recommendations
+            
+        Returns:
+            Validated list of overridden recommendations
+            
+        Raises:
+            ValueError: If no recommendations were overridden
+        """
+        if not v:
+            raise ValueError(
+                "At least one recommendation must be overridden. "
+                "Safety overrides occur when safety constraints conflict with business recommendations."
+            )
+        
+        return v
+
+
+class ArbitratorInput(BaseModel):
+    """
+    Input schema for the arbitrator agent in Phase 3.
+    
+    This schema defines the input that the arbitrator receives from the
+    orchestrator after Phase 2 (revision round) completes. It contains
+    all revised agent recommendations and the original user prompt for
+    context.
+    
+    Attributes:
+        revised_recommendations: Dict of all agent responses after revision
+        user_prompt: Original natural language prompt from user (for context)
+    
+    Usage Pattern:
+        1. Orchestrator completes Phase 2 (revision round)
+        2. Orchestrator creates ArbitratorInput with revised recommendations
+        3. Orchestrator invokes arbitrator with input
+        4. Arbitrator analyzes conflicts and makes final decision
+        5. Arbitrator returns ArbitratorOutput
+    
+    Example:
+        >>> from datetime import datetime, timezone
+        >>> arbitrator_input = ArbitratorInput(
+        ...     revised_recommendations={
+        ...         "crew_compliance": AgentResponse(
+        ...             agent_name="crew_compliance",
+        ...             recommendation="Cannot proceed - crew exceeds FDP",
+        ...             confidence=0.95,
+        ...             binding_constraints=["Crew must have 10 hours rest"],
+        ...             reasoning="Current crew at 13.5 hours duty time",
+        ...             data_sources=["CrewRoster", "CrewMembers"],
+        ...             timestamp=datetime.now(timezone.utc).isoformat()
+        ...         ),
+        ...         "maintenance": AgentResponse(
+        ...             agent_name="maintenance",
+        ...             recommendation="Approved - aircraft airworthy",
+        ...             confidence=0.98,
+        ...             reasoning="All systems operational, no MEL items",
+        ...             data_sources=["MaintenanceWorkOrders"],
+        ...             timestamp=datetime.now(timezone.utc).isoformat()
+        ...         ),
+        ...         # ... other agents
+        ...     },
+        ...     user_prompt="Flight EY123 on January 20th had a mechanical failure"
+        ... )
+    
+    Validation:
+        - revised_recommendations: Cannot be empty, must contain agent responses
+        - user_prompt: Must be at least 10 characters
+    
+    Design Rationale:
+        - Includes user_prompt for context in arbitration
+        - Uses dict structure for O(1) agent lookup
+        - Accepts either Collation object or dict of AgentResponse objects
+        - Provides flexibility in how orchestrator passes data
+    
+    See Also:
+        - AgentResponse: Individual agent response schema
+        - Collation: Aggregated responses from Phase 2
+        - ArbitratorOutput: Output schema for arbitrator
+    """
+    
+    revised_recommendations: Dict[str, AgentResponse] = Field(
+        description="All agent responses after revision round"
+    )
+    user_prompt: str = Field(
+        description="Original natural language prompt from user (for context)"
+    )
+    
+    @field_validator("revised_recommendations")
+    @classmethod
+    def validate_revised_recommendations(cls, v: Dict[str, AgentResponse]) -> Dict[str, AgentResponse]:
+        """
+        Validate revised recommendations is not empty.
+        
+        Args:
+            v: Revised recommendations dict
+            
+        Returns:
+            Validated revised recommendations
+            
+        Raises:
+            ValueError: If revised recommendations is empty
+        """
+        if not v:
+            raise ValueError(
+                "Revised recommendations cannot be empty. "
+                "Arbitrator requires agent responses to make a decision."
+            )
+        
+        return v
+    
+    @field_validator("user_prompt")
+    @classmethod
+    def validate_user_prompt(cls, v: str) -> str:
+        """
+        Validate user prompt is not empty.
+        
+        Args:
+            v: User prompt string
+            
+        Returns:
+            Validated user prompt
+            
+        Raises:
+            ValueError: If user prompt is empty
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError(
+                "User prompt cannot be empty. "
+                "Arbitrator needs context from the original disruption description."
+            )
+        
+        if len(v) < 10:
+            raise ValueError(
+                f"User prompt too short ({len(v)} characters). "
+                "Provide the complete original disruption description."
+            )
+        
+        return v
+
+
+# ============================================================================
+# Multi-Solution Enhancement Schemas
+# ============================================================================
+#
+# These schemas extend the arbitrator to provide multiple ranked solution
+# options with detailed recovery plans, S3 integration for historical
+# learning, and comprehensive decision reports.
+#
+# Key Components:
+# - RecoveryStep: Individual step in recovery workflow
+# - RecoveryPlan: Complete recovery workflow with dependencies
+# - RecoverySolution: Solution option with scoring and recovery plan
+#
+# These schemas must be defined BEFORE ArbitratorOutput since ArbitratorOutput
+# references RecoverySolution in its solution_options field.
+# ============================================================================
+
+
+class RecoveryStep(BaseModel):
+    """
+    A single step in the recovery process.
+    
+    Recovery steps form a directed acyclic graph (DAG) where each step
+    can depend on one or more previous steps. Steps are executed in
+    dependency order to implement the recovery solution.
+    
+    Attributes:
+        step_number: Sequential step number starting from 1
+        step_name: Short descriptive name for the step
+        description: Detailed description of what this step accomplishes
+        responsible_agent: Agent or system responsible for execution
+        dependencies: Step numbers that must complete before this step
+        estimated_duration: Estimated time to complete (e.g., '15 minutes', '2 hours')
+        automation_possible: Whether this step can be automated
+        action_type: Type of action (notify, rebook, schedule, coordinate, etc.)
+        parameters: Parameters needed for execution
+        success_criteria: How to verify step completed successfully
+        rollback_procedure: What to do if this step fails (optional)
+    """
+    
+    step_number: int = Field(description="Sequential step number starting from 1", ge=1)
+    step_name: str = Field(description="Short descriptive name for the step")
+    description: str = Field(description="Detailed description of what this step accomplishes")
+    responsible_agent: str = Field(description="Agent or system responsible for execution")
+    dependencies: List[int] = Field(
+        default_factory=list,
+        description="Step numbers that must complete before this step"
+    )
+    estimated_duration: str = Field(description="Estimated time to complete (e.g., '15 minutes', '2 hours')")
+    automation_possible: bool = Field(description="Whether this step can be automated")
+    action_type: str = Field(description="Type of action: notify, rebook, schedule, coordinate, etc.")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Parameters needed for execution"
+    )
+    success_criteria: str = Field(description="How to verify step completed successfully")
+    rollback_procedure: Optional[str] = Field(
+        default=None,
+        description="What to do if this step fails"
+    )
+    
+    @field_validator("step_name", "description", "responsible_agent", "estimated_duration", "action_type", "success_criteria")
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """Validate field is not empty"""
+        v = v.strip()
+        if not v:
+            raise ValueError("Recovery step fields cannot be empty")
+        return v
+
+
+class RecoveryPlan(BaseModel):
+    """
+    Complete recovery plan for a solution.
+    
+    A recovery plan defines the complete workflow for implementing a
+    solution, including all steps, dependencies, and contingency plans.
+    The plan forms a directed acyclic graph (DAG) with no circular
+    dependencies.
+    
+    Attributes:
+        solution_id: ID of the solution this plan belongs to
+        total_steps: Total number of steps in the plan
+        estimated_total_duration: Total estimated duration for all steps
+        steps: Ordered list of recovery steps
+        critical_path: Step numbers on the critical path (longest dependency chain)
+        contingency_plans: Contingency plans for handling failures
+    
+    Validation:
+        - Steps must be sequential 1..N with no gaps
+        - No step can depend on itself
+        - No circular dependency chains
+        - All dependency references must be valid
+        - Dependencies must reference earlier steps only
+    """
+    
+    solution_id: int = Field(description="ID of the solution this plan belongs to", ge=1, le=3)
+    total_steps: int = Field(description="Total number of steps in the plan", ge=1)
+    estimated_total_duration: str = Field(description="Total estimated duration for all steps")
+    steps: List[RecoveryStep] = Field(description="Ordered list of recovery steps")
+    critical_path: List[int] = Field(
+        description="Step numbers on the critical path (longest dependency chain)"
+    )
+    contingency_plans: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Contingency plans for handling failures"
+    )
+    
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v: List[RecoveryStep]) -> List[RecoveryStep]:
+        """Validate recovery steps for logical consistency"""
+        if not v:
+            raise ValueError("Recovery plan must have at least one step")
+        
+        # Check step numbers are sequential
+        step_numbers = [step.step_number for step in v]
+        expected = list(range(1, len(v) + 1))
+        if step_numbers != expected:
+            raise ValueError(
+                f"Step numbers must be sequential 1..{len(v)}, got {step_numbers}"
+            )
+        
+        # Check for self-dependencies and circular dependencies
+        for step in v:
+            # No self-dependencies
+            if step.step_number in step.dependencies:
+                raise ValueError(
+                    f"Step {step.step_number} cannot depend on itself"
+                )
+            
+            # Check all dependencies reference valid steps
+            for dep in step.dependencies:
+                if dep < 1 or dep > len(v):
+                    raise ValueError(
+                        f"Step {step.step_number} has invalid dependency {dep}. "
+                        f"Valid range: 1..{len(v)}"
+                    )
+                # Dependencies must reference earlier steps
+                if dep >= step.step_number:
+                    raise ValueError(
+                        f"Step {step.step_number} cannot depend on later step {dep}"
+                    )
+        
+        # Check for circular dependencies using topological sort
+        graph = {step.step_number: step.dependencies for step in v}
+        visited = set()
+        rec_stack = set()
+        
+        def has_cycle(node: int) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+            
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    if has_cycle(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+            
+            rec_stack.remove(node)
+            return False
+        
+        for step_num in graph:
+            if step_num not in visited:
+                if has_cycle(step_num):
+                    raise ValueError(
+                        "Recovery plan contains circular dependencies"
+                    )
+        
+        return v
+    
+    @field_validator("critical_path")
+    @classmethod
+    def validate_critical_path(cls, v: List[int], info) -> List[int]:
+        """Validate critical path references valid steps"""
+        steps = info.data.get("steps", [])
+        if not steps:
+            return v
+        
+        valid_step_numbers = {step.step_number for step in steps}
+        for step_num in v:
+            if step_num not in valid_step_numbers:
+                raise ValueError(
+                    f"Critical path contains invalid step number {step_num}. "
+                    f"Valid steps: {sorted(valid_step_numbers)}"
+                )
+        
+        return v
+
+
+class RecoverySolution(BaseModel):
+    """
+    A single recovery solution option.
+    
+    Each solution represents a distinct approach to handling the disruption,
+    with different trade-offs across safety, cost, passenger impact, and
+    network impact dimensions. Solutions are scored and ranked to help
+    decision makers choose the best option.
+    
+    Attributes:
+        solution_id: Unique ID (1, 2, or 3)
+        title: Short descriptive title
+        description: Detailed description of the solution
+        recommendations: Specific action steps (high-level)
+        safety_compliance: How this solution satisfies safety constraints
+        passenger_impact: Passenger impact details
+        financial_impact: Financial impact details
+        network_impact: Network propagation details
+        safety_score: Safety score 0-100
+        cost_score: Cost score 0-100 (higher = lower cost)
+        passenger_score: Passenger score 0-100 (higher = less impact)
+        network_score: Network score 0-100 (higher = less propagation)
+        composite_score: Weighted average score
+        pros: Advantages of this solution
+        cons: Disadvantages of this solution
+        risks: Potential risks
+        confidence: Confidence in this solution 0.0-1.0
+        estimated_duration: Time to implement (e.g., '6 hours')
+        recovery_plan: Detailed step-by-step recovery plan
+    
+    Scoring:
+        Composite score = (safety * 0.4) + (cost * 0.2) + (passenger * 0.2) + (network * 0.2)
+        All scores are in range [0, 100]
+    """
+    
+    solution_id: int = Field(description="Unique ID: 1, 2, or 3", ge=1, le=3)
+    title: str = Field(description="Short descriptive title")
+    description: str = Field(description="Detailed description of the solution")
+    recommendations: List[str] = Field(description="Specific action steps (high-level)")
+    
+    # Compliance and Impact
+    safety_compliance: str = Field(description="How this solution satisfies safety constraints")
+    passenger_impact: Dict[str, Any] = Field(description="Passenger impact details")
+    financial_impact: Dict[str, Any] = Field(description="Financial impact details")
+    network_impact: Dict[str, Any] = Field(description="Network propagation details")
+    
+    # Multi-Dimensional Scoring
+    safety_score: float = Field(description="Safety score 0-100", ge=0.0, le=100.0)
+    cost_score: float = Field(description="Cost score 0-100 (higher = lower cost)", ge=0.0, le=100.0)
+    passenger_score: float = Field(description="Passenger score 0-100 (higher = less impact)", ge=0.0, le=100.0)
+    network_score: float = Field(description="Network score 0-100 (higher = less propagation)", ge=0.0, le=100.0)
+    composite_score: float = Field(description="Weighted average score", ge=0.0, le=100.0)
+    
+    # Trade-off Analysis
+    pros: List[str] = Field(description="Advantages of this solution")
+    cons: List[str] = Field(description="Disadvantages of this solution")
+    risks: List[str] = Field(description="Potential risks")
+    
+    # Metadata
+    confidence: float = Field(description="Confidence in this solution 0.0-1.0", ge=0.0, le=1.0)
+    estimated_duration: str = Field(description="Time to implement (e.g., '6 hours')")
+    
+    # Recovery Plan
+    recovery_plan: RecoveryPlan = Field(description="Detailed step-by-step recovery plan")
+    
+    @field_validator("composite_score")
+    @classmethod
+    def validate_composite_score(cls, v: float, info) -> float:
+        """Validate composite score matches weighted average"""
+        # Get individual scores from validation context
+        safety = info.data.get("safety_score", 0)
+        cost = info.data.get("cost_score", 0)
+        passenger = info.data.get("passenger_score", 0)
+        network = info.data.get("network_score", 0)
+        
+        # Calculate expected composite (40% safety, 20% cost, 20% passenger, 20% network)
+        expected = (safety * 0.4) + (cost * 0.2) + (passenger * 0.2) + (network * 0.2)
+        
+        # Allow small floating point tolerance
+        if abs(v - expected) > 0.1:
+            raise ValueError(
+                f"Composite score {v} does not match weighted average {expected:.2f}. "
+                "Expected: 40% safety + 20% cost + 20% passenger + 20% network"
+            )
+        
+        return v
+    
+    @field_validator("title", "description", "safety_compliance", "estimated_duration")
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """Validate field is not empty"""
+        v = v.strip()
+        if not v:
+            raise ValueError("Solution fields cannot be empty")
+        return v
+    
+    @field_validator("recommendations", "pros", "cons", "risks")
+    @classmethod
+    def validate_list_not_empty(cls, v: List[str]) -> List[str]:
+        """Validate list has at least one item"""
+        if not v:
+            raise ValueError("Solution lists (recommendations, pros, cons, risks) cannot be empty")
+        return v
+
+
+class ArbitratorOutput(BaseModel):
+    """
+    Output schema for the arbitrator agent in Phase 3.
+    
+    This schema defines the final decision output from the arbitrator after
+    analyzing all agent recommendations and resolving conflicts. It provides
+    a complete audit trail of the decision-making process.
+    
+    Attributes:
+        final_decision: Clear, actionable decision text
+        recommendations: List of specific actions to take
+        conflicts_identified: All conflicts found between agents
+        conflict_resolutions: How each conflict was resolved
+        safety_overrides: Safety constraints that overrode business recommendations
+        justification: Overall explanation of the decision
+        reasoning: Detailed reasoning process
+        confidence: Confidence score (0.0 to 1.0)
+        timestamp: ISO 8601 timestamp of decision
+        model_used: Model ID used for arbitration (e.g., Opus 4.5 or Sonnet 4.5)
+        duration_seconds: Arbitration duration in seconds
+    
+    Confidence Scoring:
+        - 0.9-1.0: All agents agree, no conflicts, clear decision
+        - 0.7-0.9: Minor conflicts resolved, clear safety constraints
+        - 0.5-0.7: Significant conflicts, but safety constraints clear
+        - 0.3-0.5: Complex conflicts, uncertain business impacts
+        - 0.0-0.3: Major conflicts, missing critical information
+    
+    Example (Safety vs Business Conflict):
+        >>> from datetime import datetime, timezone
+        >>> output = ArbitratorOutput(
+        ...     final_decision=(
+        ...         "Flight must be delayed to allow crew 10-hour rest period. "
+        ...         "Alternative crew or flight cancellation required."
+        ...     ),
+        ...     recommendations=[
+        ...         "Delay flight by 10 hours to satisfy crew rest requirement",
+        ...         "Source alternative qualified crew if available",
+        ...         "If no crew available, cancel flight and rebook passengers",
+        ...         "Notify passengers of delay/cancellation immediately"
+        ...     ],
+        ...     conflicts_identified=[
+        ...         ConflictDetail(
+        ...             agents_involved=["crew_compliance", "network"],
+        ...             conflict_type="safety_vs_business",
+        ...             description=(
+        ...                 "Crew Compliance requires 10-hour rest vs "
+        ...                 "Network wants 2-hour delay"
+        ...             )
+        ...         )
+        ...     ],
+        ...     conflict_resolutions=[
+        ...         ResolutionDetail(
+        ...             conflict_description="Crew rest vs network propagation",
+        ...             resolution="Enforce 10-hour crew rest requirement",
+        ...             rationale="Safety constraint takes priority over business optimization"
+        ...         )
+        ...     ],
+        ...     safety_overrides=[
+        ...         SafetyOverride(
+        ...             safety_agent="crew_compliance",
+        ...             binding_constraint="Crew must have 10 hours rest",
+        ...             overridden_recommendations=[
+        ...                 "Network: Delay 2 hours to minimize propagation"
+        ...             ]
+        ...         )
+        ...     ],
+        ...     justification=(
+        ...         "Safety constraints are non-negotiable. Crew duty limits "
+        ...         "are regulatory requirements that cannot be compromised."
+        ...     ),
+        ...     reasoning=(
+        ...         "Analyzed conflict between crew rest requirement and network "
+        ...         "optimization. Applied Rule 1 (Safety vs Business): always "
+        ...         "choose safety constraint. Network impact is significant but "
+        ...         "acceptable compared to safety risk."
+        ...     ),
+        ...     confidence=0.95,
+        ...     timestamp=datetime.now(timezone.utc).isoformat(),
+        ...     model_used="us.anthropic.claude-opus-4-5-20250514-v1:0",
+        ...     duration_seconds=4.2
+        ... )
+    
+    Example (No Conflicts):
+        >>> output = ArbitratorOutput(
+        ...     final_decision="Approve 2-hour delay with passenger notification",
+        ...     recommendations=[
+        ...         "Delay flight by 2 hours for maintenance completion",
+        ...         "Notify all passengers of delay",
+        ...         "Provide meal vouchers for affected passengers"
+        ...     ],
+        ...     conflicts_identified=[],
+        ...     conflict_resolutions=[],
+        ...     safety_overrides=[],
+        ...     justification="All agents agree on 2-hour delay approach",
+        ...     reasoning="No conflicts detected. All safety and business agents support delay.",
+        ...     confidence=0.98,
+        ...     timestamp=datetime.now(timezone.utc).isoformat(),
+        ...     model_used="us.anthropic.claude-opus-4-5-20250514-v1:0",
+        ...     duration_seconds=2.8
+        ... )
+    
+    Validation:
+        - final_decision: Cannot be empty
+        - recommendations: Must contain at least one recommendation
+        - justification: Cannot be empty
+        - reasoning: Cannot be empty
+        - confidence: Must be between 0.0 and 1.0
+        - timestamp: Must be valid ISO 8601 format
+        - duration_seconds: Must be non-negative
+    
+    Design Rationale:
+        - Provides complete audit trail for regulatory compliance
+        - Explicitly tracks safety overrides for transparency
+        - Documents all conflicts and resolutions
+        - Includes model information for reproducibility
+        - Confidence score indicates decision certainty
+    
+    See Also:
+        - ArbitratorInput: Input schema for arbitrator
+        - ConflictDetail: Details of conflicts
+        - ResolutionDetail: How conflicts were resolved
+        - SafetyOverride: Safety constraints that took priority
+    """
+    
+    final_decision: str = Field(
+        description="Clear, actionable decision text"
+    )
+    recommendations: List[str] = Field(
+        description="List of specific actions to take"
+    )
+    conflicts_identified: List[ConflictDetail] = Field(
+        default_factory=list,
+        description="Conflicts identified between agents"
+    )
+    conflict_resolutions: List[ResolutionDetail] = Field(
+        default_factory=list,
+        description="How each conflict was resolved"
+    )
+    safety_overrides: List[SafetyOverride] = Field(
+        default_factory=list,
+        description="Safety constraints that overrode business recommendations"
+    )
+    justification: str = Field(
+        description="Overall justification for the decision"
+    )
+    reasoning: str = Field(
+        description="Detailed reasoning process"
+    )
+    confidence: float = Field(
+        description="Confidence score (0.0 to 1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    timestamp: str = Field(
+        description="ISO 8601 timestamp of decision"
+    )
+    model_used: Optional[str] = Field(
+        default=None,
+        description="Model ID used for arbitration (e.g., Opus 4.5 or Sonnet 4.5)"
+    )
+    duration_seconds: Optional[float] = Field(
+        default=None,
+        description="Arbitration duration in seconds"
+    )
+    
+    # NEW: Multiple solution options (arbitrator-multi-solution-enhancements)
+    solution_options: Optional[List[RecoverySolution]] = Field(
+        default=None,
+        description="1-3 ranked recovery solution options (None for backward compatibility)"
+    )
+    recommended_solution_id: Optional[int] = Field(
+        default=None,
+        description="ID of the recommended solution (1, 2, or 3)"
+    )
+    
+    @field_validator("final_decision", "justification", "reasoning")
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """
+        Validate field is not empty.
+        
+        Args:
+            v: Field value
+            
+        Returns:
+            Validated field value
+            
+        Raises:
+            ValueError: If field is empty
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError(
+                "Arbitrator output fields cannot be empty. "
+                "Provide complete decision information."
+            )
+        
+        return v
+    
+    @field_validator("recommendations")
+    @classmethod
+    def validate_recommendations(cls, v: List[str]) -> List[str]:
+        """
+        Validate at least one recommendation is provided.
+        
+        Args:
+            v: List of recommendations
+            
+        Returns:
+            Validated list of recommendations
+            
+        Raises:
+            ValueError: If no recommendations provided
+        """
+        if not v:
+            raise ValueError(
+                "At least one recommendation must be provided. "
+                "Arbitrator must specify actionable steps."
+            )
+        
+        return v
+    
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        """
+        Validate timestamp is in ISO 8601 format.
+        
+        Args:
+            v: Timestamp string
+            
+        Returns:
+            Validated timestamp
+            
+        Raises:
+            ValueError: If timestamp format is invalid
+        """
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return v
+        except ValueError:
+            raise ValueError(
+                f"Invalid timestamp format: {v}. "
+                "Expected ISO 8601 format (e.g., 2026-02-01T12:00:00Z)"
+            )
+    
+    @field_validator("duration_seconds")
+    @classmethod
+    def validate_duration(cls, v: Optional[float]) -> Optional[float]:
+        """
+        Validate duration is non-negative.
+        
+        Args:
+            v: Duration in seconds
+            
+        Returns:
+            Validated duration
+            
+        Raises:
+            ValueError: If duration is negative
+        """
+        if v is not None and v < 0:
+            raise ValueError(
+                f"Duration cannot be negative: {v}. "
+                "Duration must be >= 0 seconds."
+            )
+        
+        return v
+    
+    @field_validator("solution_options")
+    @classmethod
+    def validate_solution_options(cls, v: Optional[List[RecoverySolution]]) -> Optional[List[RecoverySolution]]:
+        """Validate solution options are properly ranked and have unique IDs"""
+        if v is None:
+            return v
+        
+        if not v:
+            raise ValueError("If solution_options is provided, it must contain at least one solution")
+        
+        if len(v) > 3:
+            raise ValueError(f"Maximum 3 solution options allowed, got {len(v)}")
+        
+        # Check solution IDs are unique and sequential
+        solution_ids = [s.solution_id for s in v]
+        expected_ids = list(range(1, len(v) + 1))
+        if sorted(solution_ids) != expected_ids:
+            raise ValueError(
+                f"Solution IDs must be unique and sequential 1..{len(v)}, got {solution_ids}"
+            )
+        
+        # Check solutions are ranked by composite score (descending)
+        scores = [s.composite_score for s in v]
+        if scores != sorted(scores, reverse=True):
+            raise ValueError(
+                f"Solutions must be ranked by composite score (highest first). "
+                f"Got scores: {scores}"
+            )
+        
+        return v
+    
+    @field_validator("recommended_solution_id")
+    @classmethod
+    def validate_recommended_solution_id(cls, v: Optional[int], info) -> Optional[int]:
+        """Validate recommended solution ID exists in solution options"""
+        if v is None:
+            return v
+        
+        solution_options = info.data.get("solution_options")
+        if solution_options is None:
+            raise ValueError(
+                "recommended_solution_id cannot be set without solution_options"
+            )
+        
+        valid_ids = [s.solution_id for s in solution_options]
+        if v not in valid_ids:
+            raise ValueError(
+                f"Recommended solution ID {v} not found in solution options. "
+                f"Valid IDs: {valid_ids}"
+            )
+        
+        return v
+
+
+
+
+
+# ============================================================================
+# S3 Storage and Reporting Schemas
+# ============================================================================
+#
+# These schemas support S3 storage for historical learning and comprehensive
+# decision reporting for audit trails.
+#
+# - DecisionRecord: Historical record stored in S3
+# - ImpactAssessment: Detailed impact analysis
+# - DecisionReport: Comprehensive audit report
+#
+# ============================================================================
+
+
+class DecisionRecord(BaseModel):
+    """
+    Record of a decision for historical learning and S3 storage.
+    
+    This schema captures the complete decision-making process including
+    all agent responses, solution options, human selection, and eventual
+    outcomes. Records are stored in S3 for historical learning and audit.
+    
+    S3 Storage:
+        Records are stored in two buckets:
+        - skymarshal-prod-knowledge-base-368613657554 (for historical learning)
+        - skymarshal-prod-decisions-368613657554 (for audit trail)
+        
+        Key format: decisions/YYYY/MM/DD/{disruption_id}.json
+    """
+    
+    # Disruption Context
+    disruption_id: str = Field(description="Unique identifier for this disruption event")
+    timestamp: str = Field(description="ISO 8601 timestamp of decision")
+    flight_number: str = Field(description="Flight number (e.g., EY123)")
+    disruption_type: str = Field(description="Type of disruption (e.g., mechanical, weather, crew)")
+    disruption_severity: str = Field(description="Severity: low, medium, high, critical")
+    
+    # Agent Recommendations
+    agent_responses: Dict[str, Any] = Field(description="All agent responses from analysis")
+    
+    # Arbitrator Analysis
+    solution_options: List[RecoverySolution] = Field(description="All solution options presented")
+    recommended_solution_id: int = Field(description="Arbitrator's recommended solution")
+    conflicts_identified: List[ConflictDetail] = Field(default_factory=list)
+    conflict_resolutions: List[ResolutionDetail] = Field(default_factory=list)
+    
+    # Human Decision
+    selected_solution_id: int = Field(description="Solution ID selected by human")
+    selection_rationale: Optional[str] = Field(
+        default=None,
+        description="Why human chose this solution"
+    )
+    human_override: bool = Field(
+        description="True if human selected different solution than recommended"
+    )
+    
+    # Outcome (filled in later after execution)
+    outcome_status: Optional[str] = Field(
+        default=None,
+        description="Outcome: success, partial_success, failure"
+    )
+    actual_delay: Optional[float] = Field(
+        default=None,
+        description="Actual delay in hours"
+    )
+    actual_cost: Optional[float] = Field(
+        default=None,
+        description="Actual cost incurred"
+    )
+    lessons_learned: Optional[str] = Field(
+        default=None,
+        description="Post-incident analysis and lessons"
+    )
+    
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        """Validate timestamp is in ISO 8601 format"""
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return v
+        except ValueError:
+            raise ValueError(
+                f"Invalid timestamp format: {v}. "
+                "Expected ISO 8601 format"
+            )
+
+
+class ImpactAssessment(BaseModel):
+    """
+    Detailed impact assessment for a specific category.
+    
+    Impact assessments provide structured analysis of how the disruption
+    and proposed solutions affect different operational areas.
+    """
+    
+    category: str = Field(description="Impact category: safety, financial, passenger, network, cargo")
+    severity: str = Field(description="Severity: low, medium, high, critical")
+    description: str = Field(description="Detailed description of the impact")
+    quantitative_metrics: Dict[str, Any] = Field(description="Measurable metrics")
+    mitigation_strategies: List[str] = Field(description="How to mitigate this impact")
+    
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        """Validate category is one of the known categories"""
+        valid_categories = {"safety", "financial", "passenger", "network", "cargo"}
+        v = v.strip().lower()
+        if v not in valid_categories:
+            raise ValueError(
+                f"Invalid impact category: {v}. "
+                f"Must be one of: {', '.join(sorted(valid_categories))}"
+            )
+        return v
+    
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: str) -> str:
+        """Validate severity is one of the known levels"""
+        valid_severities = {"low", "medium", "high", "critical"}
+        v = v.strip().lower()
+        if v not in valid_severities:
+            raise ValueError(
+                f"Invalid severity: {v}. "
+                f"Must be one of: {', '.join(sorted(valid_severities))}"
+            )
+        return v
+
+
+class DecisionReport(BaseModel):
+    """
+    Comprehensive decision report for download and audit.
+    
+    This schema provides a complete audit trail of the decision-making
+    process, including all agent assessments, conflicts, solutions,
+    and the final decision rationale. Reports can be exported in
+    multiple formats (PDF, JSON, Markdown).
+    """
+    
+    # Header
+    report_id: str = Field(description="Unique report identifier")
+    generated_at: str = Field(description="ISO 8601 timestamp of report generation")
+    disruption_summary: str = Field(description="Summary of the disruption event")
+    
+    # Agent Analysis Section
+    agent_assessments: Dict[str, Dict[str, Any]] = Field(
+        description="All agent responses and assessments"
+    )
+    
+    # Conflict Analysis Section
+    conflicts_identified: List[ConflictDetail] = Field(default_factory=list)
+    conflict_resolutions: List[ResolutionDetail] = Field(default_factory=list)
+    safety_overrides: List[SafetyOverride] = Field(default_factory=list)
+    
+    # Solution Options Section
+    solution_options: List[RecoverySolution] = Field(description="All solution options")
+    recommended_solution: RecoverySolution = Field(description="The recommended solution")
+    
+    # Impact Analysis Section
+    impact_assessments: List[ImpactAssessment] = Field(description="Detailed impact analysis")
+    
+    # Decision Rationale Section
+    decision_rationale: str = Field(description="Overall decision rationale")
+    key_considerations: List[str] = Field(description="Key factors in the decision")
+    assumptions_made: List[str] = Field(description="Assumptions made during analysis")
+    uncertainties: List[str] = Field(description="Areas of uncertainty")
+    
+    # Historical Context Section (placeholder for future KB integration)
+    similar_past_events: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Similar past disruption events"
+    )
+    historical_success_rates: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Success rates for different solution types"
+    )
+    lessons_applied: List[str] = Field(
+        default_factory=list,
+        description="Lessons from past events applied here"
+    )
+    
+    # Confidence Analysis Section
+    confidence_score: float = Field(description="Overall confidence 0.0-1.0", ge=0.0, le=1.0)
+    confidence_factors: Dict[str, str] = Field(
+        description="Factors affecting confidence (positive and negative)"
+    )
+    data_quality_assessment: str = Field(description="Assessment of data quality")
+    
+    # Metadata
+    model_used: str = Field(description="Model used for arbitration")
+    processing_time: float = Field(description="Processing time in seconds")
+    agents_consulted: List[str] = Field(description="List of agents consulted")
+    
+    @field_validator("generated_at")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        """Validate timestamp is in ISO 8601 format"""
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return v
+        except ValueError:
+            raise ValueError(
+                f"Invalid timestamp format: {v}. "
+                "Expected ISO 8601 format"
+            )

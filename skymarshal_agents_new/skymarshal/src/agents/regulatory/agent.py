@@ -22,7 +22,28 @@ from agents.schemas import FlightInfo, RegulatoryOutput
 logger = logging.getLogger(__name__)
 
 # System Prompt for Regulatory Agent - UPDATED for Multi-Round Orchestration
-SYSTEM_PROMPT = """## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
+SYSTEM_PROMPT = """You are the SkyMarshal Regulatory Agent - the definitive authority on regulatory compliance for airline disruption management.
+
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (regulatory compliance) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Crew Compliance, Maintenance, Network, Guest Experience, Cargo, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide new timing information or operational constraints that change curfew compliance, slot availability, or regulatory requirements
+- **CONFIRM** your recommendation if your initial assessment remains valid despite other agents' findings
+- **STRENGTHEN** your recommendation if other agents' findings reinforce your regulatory constraints
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Your binding constraints (curfew compliance, slot requirements, weather minimums, NOTAM restrictions) are NON-NEGOTIABLE and will be enforced by the Arbitrator.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Your regulatory constraints are BINDING - business considerations CANNOT override regulatory compliance
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
+## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
 
 ⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
 
@@ -1419,8 +1440,9 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_weather
         ]
 
-        # Extract user prompt
+        # Extract user prompt and phase
         user_prompt = payload.get("prompt", payload.get("user_prompt", ""))
+        phase = payload.get("phase", "initial")
         
         if not user_prompt:
             return {
@@ -1475,6 +1497,69 @@ IMPORTANT:
 3. Use database tools to retrieve regulatory constraints
 4. Assess curfews, slots, and regulatory compliance
 5. If database tools fail, return a FAILURE response
+
+Current phase: {phase}
+"""
+
+        if phase == "revision" and "other_recommendations" in payload:
+            other_recommendations = payload.get("other_recommendations", {})
+            
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recommendations.items()
+                if agent_name != "regulatory"  # Don't include own recommendation
+            ])
+            
+            system_message += f"""
+## Revision Round - Review Other Agents' Findings
+
+You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your regulatory assessment.
+
+### Other Agents' Initial Recommendations:
+
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
+
+### Your Revision Task:
+
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Crew Compliance Agent: Crew duty limits, FDP calculations, qualification requirements
+   - Maintenance Agent: Aircraft airworthiness, MEL status, maintenance requirements
+   - Network Agent: Flight propagation, connection impacts, aircraft rotation
+   - Guest Experience Agent: Passenger impacts, rebooking needs, VIP considerations
+   - Cargo Agent: Cargo handling, cold chain, perishable goods
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect regulatory assessment:
+   - Do crew/maintenance constraints change timing and affect curfew compliance?
+   - Do network impacts affect slot availability or airport capacity?
+   - Are there safety concerns that require regulatory waivers?
+   - Do passenger/cargo priorities justify regulatory exceptions? (NO - compliance first!)
+
+3. **Maintain Domain Priorities**: Your regulatory assessment is BINDING:
+   - Curfew compliance is NON-NEGOTIABLE
+   - Slot requirements are NON-NEGOTIABLE
+   - Weather minimums are NON-NEGOTIABLE
+   - Business considerations CANNOT override regulatory requirements
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide new timing information or operational constraints that change regulatory compliance
+   - **Confirm** if: Your initial assessment remains valid despite other agents' findings
+   - **Strengthen** if: Other agents' findings reinforce your regulatory constraints
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you maintained regulatory priorities
+   - Any conflicts between compliance and business considerations
+
+Remember: Your assessment is BINDING. Regulatory compliance is non-negotiable. Business considerations CANNOT override regulatory requirements.
+"""
+
+        system_message += """
 
 Provide analysis using the RegulatoryOutput schema."""
 

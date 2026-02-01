@@ -6,6 +6,7 @@ A multi-agent system for analyzing flight disruptions, built on AWS Bedrock Agen
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Multi-Solution Arbitrator](#multi-solution-arbitrator)
 - [Project Structure](#project-structure)
 - [Module Organization](#module-organization)
 - [Getting Started](#getting-started)
@@ -83,6 +84,44 @@ Response Aggregation
      ↓
 Final Decision
 ```
+
+## Multi-Solution Arbitrator
+
+The SkyMarshal arbitrator has been enhanced to provide **1-3 ranked solution options** instead of a single decision, enabling better human-in-the-loop decision making.
+
+### Key Features
+
+- **Multiple Solutions**: Generates 1-3 ranked alternatives with detailed trade-off analysis
+- **Multi-Dimensional Scoring**: Safety (40%), Cost (20%), Passenger Impact (20%), Network Impact (20%)
+- **Recovery Plans**: Each solution includes step-by-step implementation workflow with dependencies
+- **S3 Integration**: Automatic storage to knowledge base and audit buckets for historical learning
+- **Decision Reports**: Generate comprehensive audit-ready reports in JSON, Markdown, or PDF formats
+- **Backward Compatible**: Existing integrations continue to work without changes
+
+### Quick Example
+
+```python
+# Arbitrate with multi-solution output
+result = await arbitrate(phase1_responses, phase2_responses, llm)
+
+# Access solution options
+for solution in result.solution_options:
+    print(f"{solution.title}: Score {solution.composite_score:.1f}/100")
+    print(f"  Pros: {', '.join(solution.pros)}")
+    print(f"  Recovery: {solution.recovery_plan.total_steps} steps")
+
+# Get recommended solution
+recommended = next(s for s in result.solution_options
+                   if s.solution_id == result.recommended_solution_id)
+```
+
+### Documentation
+
+For complete documentation on the multi-solution arbitrator, see:
+
+- **User Guide**: [ARBITRATOR_MULTI_SOLUTION_GUIDE.md](./ARBITRATOR_MULTI_SOLUTION_GUIDE.md)
+- **Design Document**: [.kiro/specs/arbitrator-multi-solution-enhancements/design.md](../../.kiro/specs/arbitrator-multi-solution-enhancements/design.md)
+- **Requirements**: [.kiro/specs/arbitrator-multi-solution-enhancements/requirements.md](../../.kiro/specs/arbitrator-multi-solution-enhancements/requirements.md)
 
 ## Project Structure
 

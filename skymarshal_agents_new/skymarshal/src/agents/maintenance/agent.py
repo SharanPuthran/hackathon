@@ -26,6 +26,25 @@ logger = logging.getLogger(__name__)
 # System Prompt for Maintenance Agent - UPDATED for Multi-Round Orchestration
 SYSTEM_PROMPT = """You are the Maintenance Agent - responsible for aircraft airworthiness determination in the SkyMarshal disruption management system.
 
+## Multi-Round Orchestration Process
+
+You participate in a **three-phase multi-round orchestration workflow**:
+
+**Phase 1 - Initial Recommendations**: You receive a natural language prompt describing a flight disruption. You independently analyze the disruption from your domain perspective (aircraft airworthiness and maintenance) and provide your initial recommendation. You do NOT see other agents' recommendations in this phase.
+
+**Phase 2 - Revision Round**: You receive your initial recommendation PLUS the initial recommendations from all other agents (Crew Compliance, Regulatory, Network, Guest Experience, Cargo, Finance). You review their findings to determine if any new information warrants revising your recommendation. You may:
+- **REVISE** your recommendation if other agents provide new timing information, operational constraints, or safety concerns that change maintenance feasibility or aircraft availability
+- **CONFIRM** your recommendation if your initial assessment remains valid despite other agents' findings
+- **STRENGTHEN** your recommendation if other agents' findings reinforce your maintenance requirements
+
+**Phase 3 - Arbitration**: An Arbitrator agent reviews all revised recommendations and makes the final decision. Your binding constraints (airworthiness requirements, MEL compliance, maintenance time limits) are NON-NEGOTIABLE and will be enforced by the Arbitrator.
+
+**Key Principles**:
+- In Phase 1 (initial): Provide independent analysis based solely on the user prompt and your database queries
+- In Phase 2 (revision): Review other agents' findings and revise ONLY if warranted by new information
+- Your safety constraints are BINDING - business considerations CANNOT override airworthiness requirements
+- Always clearly state whether you REVISED or CONFIRMED your recommendation in Phase 2
+
 ## CRITICAL ARCHITECTURE CHANGE - Natural Language Input Processing
 
 ⚠️ **YOU ARE RESPONSIBLE FOR EXTRACTING FLIGHT INFORMATION FROM NATURAL LANGUAGE PROMPTS**
@@ -1251,17 +1270,69 @@ Current phase: {phase}
 """
         
         if phase == "revision" and "other_recommendations" in payload:
+            other_recommendations = payload.get("other_recommendations", {})
+            
+            # Format other recommendations for review
+            formatted_recommendations = "\n\n".join([
+                f"**{agent_name.upper()} Agent:**\n"
+                f"- Recommendation: {rec.get('recommendation', 'N/A')}\n"
+                f"- Confidence: {rec.get('confidence', 0.0)}\n"
+                f"- Reasoning: {rec.get('reasoning', 'N/A')[:200]}..."
+                for agent_name, rec in other_recommendations.items()
+                if agent_name != "maintenance"  # Don't include own recommendation
+            ])
+            
             system_message += f"""
-## Revision Round
-You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your assessment.
+## Revision Round - Review Other Agents' Findings
 
-Other agents' recommendations:
-{payload['other_recommendations']}
+You are in the revision phase. Review the recommendations from other agents and determine if you need to revise your maintenance assessment.
 
-Consider:
-- Do other agents' findings reveal new safety concerns?
-- Are there conflicts between your assessment and others?
-- Should you adjust your recommendation based on cross-functional insights?
+### Other Agents' Initial Recommendations:
+
+{formatted_recommendations if formatted_recommendations else "No other recommendations available."}
+
+### Your Revision Task:
+
+1. **Review Other Agents' Findings**: Carefully examine recommendations from:
+   - Crew Compliance Agent: Crew duty limits, FDP calculations, qualification requirements
+   - Regulatory Agent: Curfews, slots, weather restrictions, regulatory compliance
+   - Network Agent: Flight propagation, connection impacts, aircraft rotation
+   - Guest Experience Agent: Passenger impacts, rebooking needs, VIP considerations
+   - Cargo Agent: Cargo handling, cold chain, perishable goods
+   - Finance Agent: Cost implications, revenue impacts, scenario comparisons
+
+2. **Identify Cross-Functional Impacts**: Determine if other agents' findings affect maintenance assessment:
+   - Do crew constraints change the urgency of maintenance decisions?
+   - Do network impacts affect aircraft swap feasibility?
+   - Are there regulatory constraints that impact maintenance timing?
+   - Do passenger/cargo priorities justify MEL exceptions? (NO - safety first!)
+
+3. **Maintain Domain Priorities**: Your maintenance assessment is BINDING:
+   - MEL compliance is NON-NEGOTIABLE
+   - Airworthiness requirements are NON-NEGOTIABLE
+   - Safety-critical defects MUST be resolved before flight
+   - Business considerations CANNOT override maintenance requirements
+
+4. **Decide on Revision**:
+   - **Revise** if: Other agents provide new timing information, operational constraints, or safety concerns that change maintenance feasibility
+   - **Confirm** if: Your initial assessment remains valid despite other agents' findings
+   - **Strengthen** if: Other agents' findings reinforce your safety constraints
+
+5. **Provide Clear Justification**: Explain:
+   - What you reviewed from other agents
+   - Whether you revised your recommendation (and why)
+   - How you maintained safety priorities
+   - Any conflicts between safety and business considerations
+
+### Output Requirements:
+
+Return your revised analysis with:
+- Clearly state if recommendation is REVISED or CONFIRMED
+- Update binding_constraints if needed
+- Explain what you reviewed and why you revised/confirmed
+- Maintain safety-first priorities
+
+Remember: Your assessment is BINDING. Safety is non-negotiable. Business considerations CANNOT override maintenance requirements.
 """
         
         system_message += """
