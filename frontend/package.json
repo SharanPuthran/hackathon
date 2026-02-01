@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:verify": "vite build && node verify-build.js",
+    "build:safe": "node validate-env.js && vite build",
+    "validate:env": "node validate-env.js",
+    "verify": "node verify-build.js",
     "preview": "vite preview"
   },
   "dependencies": {
