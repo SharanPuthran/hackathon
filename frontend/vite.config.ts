@@ -9,6 +9,15 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      proxy: {
+        // Proxy API requests to avoid CORS issues in development
+        '/api': {
+          target: 'https://kkyfoiq8il.execute-api.us-east-1.amazonaws.com/dev',
+          changeOrigin: true,
+          secure: true,
+          rewrite: (path) => path,
+        }
+      }
     },
     plugins: [react()],
     build: {

@@ -612,10 +612,10 @@ async def test_arbitrate_error_handling():
     result = await arbitrate(responses, llm_opus=mock_llm)
     
     # Verify fallback decision
-    assert "Unable to complete arbitration" in result["final_decision"]
+    assert "ARBITRATION FAILED" in result["final_decision"]
     assert result["confidence"] == 0.0
     assert "error" in result
-    assert "Manual review required" in result["recommendations"]
+    assert any("Manual review required" in rec for rec in result["recommendations"])
 
 
 @pytest.mark.asyncio
@@ -1618,3 +1618,503 @@ class TestProperty9ConservativeConflictResolution:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ============================================================================
+# Knowledge Base Integration Tests
+# ============================================================================
+
+
+class TestKnowledgeBaseIntegration:
+    """
+    Tests for Knowledge Base integration in the Arbitrator.
+    
+    Verifies that:
+    - Knowledge Base is queried during arbitration
+    - knowledgeBaseConsidered flag is set correctly
+    - Operational procedures are included in the prompt
+    - KB metadata is included in the response
+    """
+    
+    @pytest.mark.asyncio
+    async def test_knowledge_base_queried_and_flag_set(self):
+        """
+        Test that Knowledge Base is queried and knowledgeBaseConsidered flag is set.
+        
+        When KB is enabled and returns documents, the response should include:
+        - knowledgeBaseConsidered: true
+        - knowledge_base metadata with documents_found > 0
+        """
+        responses = {
+            "crew_compliance": {
+                "recommendation": "Cannot proceed - crew exceeds FDP",
+                "confidence": 0.95,
+                "binding_constraints": ["Crew must have 10 hours rest"],
+                "reasoning": "Current crew at 13.5 hours duty time"
+            },
+            "network": {
+                "recommendation": "Delay 2 hours",
+                "confidence": 0.85,
+                "reasoning": "Minimize propagation"
+            }
+        }
+        
+        # Create mock LLM
+        mock_llm = Mock()
+        mock_structured_llm = Mock()
+        
+        mock_decision = ArbitratorOutput(
+            final_decision="Enforce crew rest requirement",
+            recommendations=["Delay flight for crew rest"],
+            justification="Safety first",
+            reasoning="Applied safety-first rule",
+            confidence=0.95,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        mock_structured_llm.invoke = Mock(return_value=mock_decision)
+        mock_llm.with_structured_output = Mock(return_value=mock_structured_llm)
+        
+        # Mock the Knowledge Base client
+        with patch('agents.arbitrator.agent.get_knowledge_base_client') as mock_get_kb:
+            mock_kb_client = Mock()
+            mock_kb_client.enabled = True
+            mock_kb_client.query_operational_procedures = AsyncMock(return_value={
+                'procedures': [
+                    {
+                        'content': 'SOP for crew rest management...',
+                        'source': 's3://kb-bucket/sop-crew-rest.pdf',
+                        'relevance_score': 0.85,
+                        'document_type': 'Standard Operating Procedure (SOP)'
+                    },
+                    {
+                        'content': 'OCM section on FDP limits...',
+                        'source': 's3://kb-bucket/ocm-fdp.pdf',
+                        'relevance_score': 0.78,
+                        'document_type': 'Operation Control Manual (OCM)'
+                    }
+                ],
+                'decision_guidance': 'Follow SOP-CREW-001 for rest requirements',
+                'applicable_protocols': ['SOP-CREW-001', 'OCM-5.2'],
+                'documents_found': 2,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            mock_get_kb.return_value = mock_kb_client
+            
+            # Call arbitrate
+            result = await arbitrate(responses, llm_opus=mock_llm)
+        
+        # Verify KB was queried
+        mock_kb_client.query_operational_procedures.assert_called_once()
+        
+        # Verify knowledgeBaseConsidered flag is True
+        assert result.get('knowledgeBaseConsidered') is True, \
+            "knowledgeBaseConsidered should be True when KB returns documents"
+        
+        # Verify knowledge_base metadata
+        kb_metadata = result.get('knowledge_base', {})
+        assert kb_metadata.get('knowledge_base_queried') is True
+        assert kb_metadata.get('documents_found') == 2
+        assert 'SOP-CREW-001' in kb_metadata.get('applicable_protocols', [])
+    
+    @pytest.mark.asyncio
+    async def test_knowledge_base_no_documents_found(self):
+        """
+        Test knowledgeBaseConsidered is False when KB returns no documents.
+        """
+        responses = {
+            "crew_compliance": {
+                "recommendation": "Approved",
+                "confidence": 0.90,
+                "binding_constraints": [],
+                "reasoning": "Crew within limits"
+            }
+        }
+        
+        mock_llm = Mock()
+        mock_structured_llm = Mock()
+        
+        mock_decision = ArbitratorOutput(
+            final_decision="Proceed with flight",
+            recommendations=["Continue as scheduled"],
+            justification="All clear",
+            reasoning="No issues found",
+            confidence=0.90,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        mock_structured_llm.invoke = Mock(return_value=mock_decision)
+        mock_llm.with_structured_output = Mock(return_value=mock_structured_llm)
+        
+        # Mock KB returning no documents
+        with patch('agents.arbitrator.agent.get_knowledge_base_client') as mock_get_kb:
+            mock_kb_client = Mock()
+            mock_kb_client.enabled = True
+            mock_kb_client.query_operational_procedures = AsyncMock(return_value={
+                'procedures': [],
+                'documents_found': 0
+            })
+            mock_get_kb.return_value = mock_kb_client
+            
+            result = await arbitrate(responses, llm_opus=mock_llm)
+        
+        # knowledgeBaseConsidered should be False when no documents found
+        assert result.get('knowledgeBaseConsidered') is False, \
+            "knowledgeBaseConsidered should be False when KB returns no documents"
+        
+        # But knowledge_base_queried should still be True
+        kb_metadata = result.get('knowledge_base', {})
+        assert kb_metadata.get('knowledge_base_queried') is True
+        assert kb_metadata.get('documents_found') == 0
+    
+    @pytest.mark.asyncio
+    async def test_knowledge_base_disabled(self):
+        """
+        Test knowledgeBaseConsidered is False when KB is disabled.
+        """
+        responses = {
+            "crew_compliance": {
+                "recommendation": "Approved",
+                "confidence": 0.90,
+                "binding_constraints": [],
+                "reasoning": "Crew within limits"
+            }
+        }
+        
+        mock_llm = Mock()
+        mock_structured_llm = Mock()
+        
+        mock_decision = ArbitratorOutput(
+            final_decision="Proceed with flight",
+            recommendations=["Continue as scheduled"],
+            justification="All clear",
+            reasoning="No issues found",
+            confidence=0.90,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        mock_structured_llm.invoke = Mock(return_value=mock_decision)
+        mock_llm.with_structured_output = Mock(return_value=mock_structured_llm)
+        
+        # Mock KB being disabled
+        with patch('agents.arbitrator.agent.get_knowledge_base_client') as mock_get_kb:
+            mock_kb_client = Mock()
+            mock_kb_client.enabled = False
+            mock_get_kb.return_value = mock_kb_client
+            
+            result = await arbitrate(responses, llm_opus=mock_llm)
+        
+        # knowledgeBaseConsidered should be False when KB is disabled
+        assert result.get('knowledgeBaseConsidered') is False, \
+            "knowledgeBaseConsidered should be False when KB is disabled"
+        
+        # knowledge_base_queried should be False
+        kb_metadata = result.get('knowledge_base', {})
+        assert kb_metadata.get('knowledge_base_queried') is False
+    
+    @pytest.mark.asyncio
+    async def test_knowledge_base_query_failure(self):
+        """
+        Test graceful handling when KB query fails.
+        
+        Arbitration should continue even if KB query fails.
+        """
+        responses = {
+            "crew_compliance": {
+                "recommendation": "Cannot proceed",
+                "confidence": 0.95,
+                "binding_constraints": ["Crew must rest"],
+                "reasoning": "FDP exceeded"
+            }
+        }
+        
+        mock_llm = Mock()
+        mock_structured_llm = Mock()
+        
+        mock_decision = ArbitratorOutput(
+            final_decision="Enforce crew rest",
+            recommendations=["Delay for rest"],
+            justification="Safety first",
+            reasoning="Applied safety rule",
+            confidence=0.90,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        mock_structured_llm.invoke = Mock(return_value=mock_decision)
+        mock_llm.with_structured_output = Mock(return_value=mock_structured_llm)
+        
+        # Mock KB query raising an exception
+        with patch('agents.arbitrator.agent.get_knowledge_base_client') as mock_get_kb:
+            mock_kb_client = Mock()
+            mock_kb_client.enabled = True
+            mock_kb_client.query_operational_procedures = AsyncMock(
+                side_effect=Exception("KB connection failed")
+            )
+            mock_get_kb.return_value = mock_kb_client
+            
+            # Should not raise - arbitration continues without KB
+            result = await arbitrate(responses, llm_opus=mock_llm)
+        
+        # Arbitration should complete successfully
+        assert result.get('final_decision') is not None
+        
+        # knowledgeBaseConsidered should be False due to error
+        assert result.get('knowledgeBaseConsidered') is False
+        
+        # Error should be recorded in metadata
+        kb_metadata = result.get('knowledge_base', {})
+        assert 'error' in kb_metadata or kb_metadata.get('knowledge_base_queried') is False
+    
+    @pytest.mark.asyncio
+    async def test_knowledge_base_metadata_in_fallback_decision(self):
+        """
+        Test that KB metadata is included even in fallback decisions.
+        
+        When arbitration fails and returns a fallback, KB metadata should still be present.
+        """
+        responses = {
+            "crew_compliance": {
+                "recommendation": "Test",
+                "confidence": 0.9,
+                "reasoning": "Test"
+            }
+        }
+        
+        # Create mock LLM that raises exception
+        mock_llm = Mock()
+        mock_llm.with_structured_output = Mock(side_effect=Exception("Model error"))
+        
+        # Mock KB returning documents before the error
+        with patch('agents.arbitrator.agent.get_knowledge_base_client') as mock_get_kb:
+            mock_kb_client = Mock()
+            mock_kb_client.enabled = True
+            mock_kb_client.query_operational_procedures = AsyncMock(return_value={
+                'procedures': [{'content': 'Test', 'source': 'test.pdf', 'relevance_score': 0.8, 'document_type': 'SOP'}],
+                'documents_found': 1
+            })
+            mock_get_kb.return_value = mock_kb_client
+            
+            result = await arbitrate(responses, llm_opus=mock_llm)
+        
+        # Should return fallback decision
+        assert "ARBITRATION FAILED" in result["final_decision"]
+        
+        # KB metadata should still be present
+        assert 'knowledge_base' in result
+        assert 'knowledgeBaseConsidered' in result
+
+
+class TestKnowledgeBaseClient:
+    """
+    Unit tests for the KnowledgeBaseClient class.
+    
+    Note: boto3 is imported inside the KnowledgeBaseClient.__init__ method,
+    so we need to patch 'boto3.client' at the module level.
+    """
+    
+    def test_knowledge_base_client_initialization_with_env_var(self):
+        """Test KB client uses environment variable for KB ID."""
+        import os
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        # Set environment variable
+        original_value = os.environ.get('KNOWLEDGE_BASE_ID')
+        os.environ['KNOWLEDGE_BASE_ID'] = 'TEST_KB_ID'
+        
+        try:
+            with patch.object(boto3, 'client', return_value=Mock()):
+                client = KnowledgeBaseClient()
+                assert client.knowledge_base_id == 'TEST_KB_ID'
+        finally:
+            # Restore original value
+            if original_value:
+                os.environ['KNOWLEDGE_BASE_ID'] = original_value
+            else:
+                os.environ.pop('KNOWLEDGE_BASE_ID', None)
+    
+    def test_knowledge_base_client_initialization_with_explicit_id(self):
+        """Test KB client uses explicit ID when provided."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        with patch.object(boto3, 'client', return_value=Mock()):
+            client = KnowledgeBaseClient(knowledge_base_id='EXPLICIT_KB_ID')
+            assert client.knowledge_base_id == 'EXPLICIT_KB_ID'
+    
+    def test_knowledge_base_client_disabled_when_boto3_fails(self):
+        """Test KB client is disabled when boto3 client creation fails."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        # Mock boto3.client to raise an exception
+        with patch.object(boto3, 'client', side_effect=Exception("AWS credentials not found")):
+            client = KnowledgeBaseClient(knowledge_base_id='TEST_KB')
+            # Client should be disabled due to boto3 failure
+            assert client.enabled is False
+            assert client.client is None
+    
+    @pytest.mark.asyncio
+    async def test_query_operational_procedures_returns_structured_data(self):
+        """Test that query_operational_procedures returns properly structured data."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        # Create mock bedrock client
+        mock_bedrock = Mock()
+        mock_bedrock.retrieve.return_value = {
+            'retrievalResults': [
+                {
+                    'content': {'text': 'SOP-CREW-001: Crew rest requirements...'},
+                    'score': 0.85,
+                    'location': {'s3Location': {'uri': 's3://kb/sop-crew.pdf'}}
+                },
+                {
+                    'content': {'text': 'OCM Section 5.2: FDP limits...'},
+                    'score': 0.78,
+                    'location': {'s3Location': {'uri': 's3://kb/ocm.pdf'}}
+                }
+            ]
+        }
+        
+        with patch.object(boto3, 'client', return_value=mock_bedrock):
+            client = KnowledgeBaseClient(knowledge_base_id='TEST_KB')
+            
+            result = await client.query_operational_procedures(
+                disruption_scenario="Crew FDP violation",
+                binding_constraints=["Crew must have 10 hours rest"],
+                agent_recommendations={"crew_compliance": {"recommendation": "Cannot proceed"}}
+            )
+        
+        # Verify structure
+        assert result is not None
+        assert 'procedures' in result
+        assert 'documents_found' in result
+        assert result['documents_found'] == 2
+        assert len(result['procedures']) == 2
+        
+        # Verify procedure structure
+        proc = result['procedures'][0]
+        assert 'content' in proc
+        assert 'source' in proc
+        assert 'relevance_score' in proc
+        assert 'document_type' in proc
+    
+    @pytest.mark.asyncio
+    async def test_query_operational_procedures_disabled_returns_none(self):
+        """Test that query returns None when KB is disabled."""
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        # Create disabled client by passing empty string
+        client = KnowledgeBaseClient(knowledge_base_id='')
+        # Manually ensure it's disabled
+        client.enabled = False
+        
+        result = await client.query_operational_procedures(
+            disruption_scenario="Test",
+            binding_constraints=[],
+            agent_recommendations={}
+        )
+        
+        assert result is None
+    
+    def test_extract_key_issues_from_agent_recommendations(self):
+        """Test extraction of key issues from agent recommendations."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        with patch.object(boto3, 'client', return_value=Mock()):
+            client = KnowledgeBaseClient(knowledge_base_id='TEST')
+        
+        recommendations = {
+            "crew_compliance": {
+                "recommendation": "Cannot proceed - crew exceeds FDP limits",
+                "reasoning": "Current duty time is 13.5 hours",
+                "binding_constraints": ["Crew must have 10 hours rest"]
+            },
+            "network": {
+                "recommendation": "Delay 2 hours to minimize propagation",
+                "reasoning": "Affects 3 downstream flights"
+            }
+        }
+        
+        issues = client._extract_key_issues(recommendations)
+        
+        assert "Crew Compliance" in issues
+        assert "Network" in issues
+        assert "Cannot proceed" in issues or "FDP" in issues
+    
+    def test_identify_document_type(self):
+        """Test document type identification from source and content."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        with patch.object(boto3, 'client', return_value=Mock()):
+            client = KnowledgeBaseClient(knowledge_base_id='TEST')
+        
+        # Test SOP identification
+        doc_type = client._identify_document_type(
+            source='s3://bucket/sop-crew-rest.pdf',
+            content='This is a standard operating procedure...'
+        )
+        assert 'SOP' in doc_type or 'Standard Operating Procedure' in doc_type
+        
+        # Test OCM identification
+        doc_type = client._identify_document_type(
+            source='s3://bucket/ocm-section5.pdf',
+            content='Operation control manual section...'
+        )
+        assert 'OCM' in doc_type or 'Operation Control Manual' in doc_type
+        
+        # Test generic document
+        doc_type = client._identify_document_type(
+            source='s3://bucket/document.pdf',
+            content='Some general content...'
+        )
+        assert doc_type is not None  # Should return some classification
+    
+    def test_extract_protocol_names(self):
+        """Test extraction of protocol names from content."""
+        import boto3
+        from agents.arbitrator.knowledge_base import KnowledgeBaseClient
+        
+        with patch.object(boto3, 'client', return_value=Mock()):
+            client = KnowledgeBaseClient(knowledge_base_id='TEST')
+        
+        content = """
+        According to SOP-CREW-001, crew rest requirements must be followed.
+        Per the Crew Rest Protocol, minimum 10 hours rest is required.
+        Section 5.2: Flight Duty Period limits apply.
+        Following the Operation Control Manual guidelines...
+        """
+        
+        protocols = client._extract_protocol_names(content)
+        
+        assert len(protocols) > 0
+        # Should find at least some protocol references
+        protocol_text = ' '.join(protocols).lower()
+        assert 'crew' in protocol_text or 'sop' in protocol_text or 'section' in protocol_text
+
+
+class TestKnowledgeBaseSingleton:
+    """
+    Tests for the Knowledge Base singleton pattern.
+    """
+    
+    def test_get_knowledge_base_client_returns_singleton(self):
+        """Test that get_knowledge_base_client returns the same instance."""
+        import boto3
+        from agents.arbitrator.knowledge_base import get_knowledge_base_client
+        import agents.arbitrator.knowledge_base as kb_module
+        
+        # Reset singleton
+        kb_module._kb_client_instance = None
+        
+        with patch.object(boto3, 'client', return_value=Mock()):
+            client1 = get_knowledge_base_client()
+            client2 = get_knowledge_base_client()
+        
+        assert client1 is client2, "get_knowledge_base_client should return singleton"
+        
+        # Reset for other tests
+        kb_module._kb_client_instance = None

@@ -1,22 +1,34 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { AgentAvatar, AgentType } from './AgentAvatar';
-import { AgentMessage, MessageData } from './AgentMessage';
-import { BrainCircuit, Loader2, ChevronRight } from 'lucide-react';
-import { ArbitratorPanel, Solution } from './ArbitratorPanel';
+import React, { useState, useEffect, useRef } from "react";
+import { AgentAvatar, AgentType } from "./AgentAvatar";
+import { AgentMessage, MessageData } from "./AgentMessage";
+import { BrainCircuit, ChevronRight } from "lucide-react";
+import { ArbitratorPanel, Solution } from "./ArbitratorPanel";
+import { InvokeResponse } from "../services/api";
+import { ResponseMapper } from "../services/responseMapper";
 
 interface OrchestrationViewProps {
   prompt: string;
+  apiResponse: InvokeResponse;
 }
 
-const AGENT_ROSTER: Exclude<AgentType, 'Arbitrator'>[] = [
-  'Maintenance', 
-  'Regulatory', 
-  'Crew_Compliance', 
-  'Network', 
-  'Guest_Experience', 
-  'Cargo', 
-  'Finance'
+const AGENT_ROSTER: Exclude<AgentType, "Arbitrator">[] = [
+  "Maintenance",
+  "Regulatory",
+  "Crew_Compliance",
+  "Network",
+  "Guest_Experience",
+  "Cargo",
+  "Finance",
 ];
+
+/* ============================================================================
+ * MOCK DATA - COMMENTED OUT FOR API INTEGRATION
+ * 
+ * To re-enable mock mode for testing:
+ * 1. Uncomment the mock data below
+ * 2. Uncomment the mock orchestration sequence in useEffect
+ * 3. Comment out the API response parsing logic
+ * ============================================================================
 
 // Data-Rich Mock Responses
 const MOCK_INITIAL_RESPONSES: Record<Exclude<AgentType, 'Arbitrator'>, { safety: string, business: string }> = {
@@ -87,25 +99,94 @@ const ARBITRATOR_SOLUTIONS: Solution[] = [
   }
 ];
 
-type Stage = 'summoning' | 'initial_round' | 'waiting_for_user' | 'cross_impact' | 'decision_phase';
+============================================================================ */
 
-export default function OrchestrationView({ prompt }: OrchestrationViewProps) {
-  const [stage, setStage] = useState<Stage>('summoning');
+type Stage =
+  | "summoning"
+  | "initial_round"
+  | "waiting_for_user"
+  | "cross_impact"
+  | "decision_phase";
+
+export default function OrchestrationView({
+  prompt,
+  apiResponse,
+}: OrchestrationViewProps) {
+  const [stage, setStage] = useState<Stage>("summoning");
   const [messages, setMessages] = useState<MessageData[]>([]);
+  const [solutions, setSolutions] = useState<Solution[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentType | null>(null);
   const [thinkingAgent, setThinkingAgent] = useState<AgentType | null>(null);
-  const [arbitratorAnalysis, setArbitratorAnalysis] = useState<string>("Parsing scenario parameters...");
-  const [selectedSolutionId, setSelectedSolutionId] = useState<string | null>(null);
+  const [arbitratorAnalysis, setArbitratorAnalysis] = useState<string>(
+    "Parsing scenario parameters...",
+  );
+  const [selectedSolutionId, setSelectedSolutionId] = useState<string | null>(
+    null,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollIntoView({ behavior: 'smooth' });
+      scrollRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, activeAgent, thinkingAgent]);
 
-  // Orchestration Sequence
+  // Parse API response and display agent messages
+  useEffect(() => {
+    const displayApiResponse = async () => {
+      // 1. Summoning stage
+      setArbitratorAnalysis("Initializing swarm intelligence...");
+      await new Promise((r) => setTimeout(r, 2000));
+
+      setArbitratorAnalysis(
+        "Processing agent responses from AgentCore Runtime...",
+      );
+      setStage("initial_round");
+
+      // 2. Parse API response
+      if (apiResponse.assessment) {
+        const parsed = ResponseMapper.parseResponse(apiResponse.assessment);
+
+        // Display messages one by one with animation
+        for (const message of parsed.messages) {
+          setThinkingAgent(message.agent);
+          await new Promise((r) => setTimeout(r, 800)); // Thinking
+          setThinkingAgent(null);
+          setActiveAgent(message.agent);
+
+          setMessages((prev) => [...prev, message]);
+
+          await new Promise((r) => setTimeout(r, 1000)); // Speaking duration
+          setActiveAgent(null);
+        }
+
+        // Set solutions
+        setSolutions(parsed.solutions);
+
+        setArbitratorAnalysis(
+          "Initial impact assessment complete. Analysis ready for review.",
+        );
+        setStage("waiting_for_user");
+      } else {
+        // Handle case where assessment is missing
+        setArbitratorAnalysis("Warning: No assessment data received from API.");
+        setStage("waiting_for_user");
+      }
+    };
+
+    if (stage === "summoning") {
+      displayApiResponse();
+    }
+  }, [stage, apiResponse]);
+
+  /* ============================================================================
+   * MOCK ORCHESTRATION SEQUENCE - COMMENTED OUT FOR API INTEGRATION
+   * 
+   * To re-enable mock mode, uncomment this section and comment out the API
+   * response parsing logic above.
+   * ============================================================================
+
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
 
@@ -147,104 +228,168 @@ export default function OrchestrationView({ prompt }: OrchestrationViewProps) {
     return () => clearTimeout(timeoutId);
   }, [stage]);
 
-  const handleCrossImpact = async () => {
-    setStage('cross_impact');
-    setArbitratorAnalysis("Running cross-dependency simulation...");
+  ============================================================================ */
 
-    for (const agent of AGENT_ROSTER) {
-      setThinkingAgent(agent);
-      await new Promise(r => setTimeout(r, 1000)); // Thinking
-      setThinkingAgent(null);
-      setActiveAgent(agent);
-      
-      setMessages(prev => [...prev, {
-        id: `cross-${Date.now()}`,
-        agent: agent,
-        crossImpactAnalysis: MOCK_CROSS_IMPACT_RESPONSES[agent],
-        isCrossImpactRound: true
-      }]);
-      
-      await new Promise(r => setTimeout(r, 1200));
-      setActiveAgent(null);
+  const handleCrossImpact = async () => {
+    setStage("cross_impact");
+    setArbitratorAnalysis(
+      "Initiating cross-impact analysis with session context...",
+    );
+
+    try {
+      // Import API service dynamically to avoid circular dependencies
+      const { APIService } = await import("../services/api");
+      const { getConfig } = await import("../config/env");
+      const { ResponseMapper } = await import("../services/responseMapper");
+
+      const config = getConfig();
+      const apiService = new APIService({
+        endpoint: config.apiEndpoint,
+        region: config.awsRegion,
+        timeout: config.apiTimeout,
+      });
+
+      // Make cross-impact API call with session_id
+      const response = await apiService.invoke({
+        prompt: "Perform cross-impact analysis",
+        session_id: apiResponse.session_id,
+      });
+
+      // Parse and display cross-impact responses
+      if (response.assessment) {
+        const parsed = ResponseMapper.parseResponse(response.assessment);
+
+        // Display cross-impact messages one by one
+        for (const message of parsed.messages) {
+          setThinkingAgent(message.agent);
+          await new Promise((r) => setTimeout(r, 800));
+          setThinkingAgent(null);
+          setActiveAgent(message.agent);
+
+          // Mark as cross-impact round
+          setMessages((prev) => [
+            ...prev,
+            {
+              ...message,
+              isCrossImpactRound: true,
+            },
+          ]);
+
+          await new Promise((r) => setTimeout(r, 1000));
+          setActiveAgent(null);
+        }
+
+        // Update solutions if new ones are provided
+        if (parsed.solutions.length > 0) {
+          setSolutions(parsed.solutions);
+        }
+      }
+
+      setStage("decision_phase");
+      setArbitratorAnalysis(
+        "Cross-impact analysis complete. Review the recommended solutions below.",
+      );
+    } catch (error) {
+      console.error("Cross-impact analysis failed:", error);
+      setArbitratorAnalysis(
+        "Cross-impact analysis encountered an error. Proceeding with initial assessment.",
+      );
+      setStage("decision_phase");
     }
-    
-    setArbitratorAnalysis("Cross-impact validated. Formulating recovery strategies...");
-    await new Promise(r => setTimeout(r, 1500));
-    setStage('decision_phase');
-    setArbitratorAnalysis("Analysis Complete. 3 Viable Recovery Options generated based on Safety Constraints and Commercial Impact.");
   };
 
   const handleSolutionSelect = (sol: Solution) => {
     setSelectedSolutionId(sol.id);
-    setMessages(prev => [...prev, {
-      id: `decision-${Date.now()}`,
-      agent: 'Arbitrator',
-      crossImpactAnalysis: `Strategic course set. Initiating Operational Recovery Plan (ORP-992).`,
-      isCrossImpactRound: true,
-      isDecision: true,
-      solutionTitle: sol.title
-    }]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `decision-${Date.now()}`,
+        agent: "Arbitrator",
+        crossImpactAnalysis: `Strategic course set. Initiating Operational Recovery Plan.`,
+        isCrossImpactRound: true,
+        isDecision: true,
+        solutionTitle: sol.title,
+      },
+    ]);
     setArbitratorAnalysis(`EXECUTING: ${sol.title}`);
   };
 
   const handleOverride = (text: string) => {
-    setSelectedSolutionId('override');
-    setMessages(prev => [...prev, {
-      id: `override-${Date.now()}`,
-      agent: 'Arbitrator',
-      crossImpactAnalysis: `Manual Directive: "${text}"`,
-      isCrossImpactRound: true,
-      isDecision: true,
-      solutionTitle: 'Manual Override Strategy'
-    }]);
+    setSelectedSolutionId("override");
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `override-${Date.now()}`,
+        agent: "Arbitrator",
+        crossImpactAnalysis: `Manual Directive: "${text}"`,
+        isCrossImpactRound: true,
+        isDecision: true,
+        solutionTitle: "Manual Override Strategy",
+      },
+    ]);
     setArbitratorAnalysis("Processing Manual Directive...");
   };
 
   return (
     <div className="flex w-full h-full bg-slate-50 relative overflow-hidden">
-      
       {/* --- Left Side: Chat & Roster (75%) --- */}
       <div className="flex-1 flex flex-col relative h-full">
-        
         {/* Teams-style Top Bar / Roster Overlay */}
         <div className="absolute top-0 left-0 right-0 h-36 bg-white/95 backdrop-blur-xl z-20 flex items-center justify-center border-b border-slate-200/80 shadow-sm pt-6">
           <div className="flex gap-4 md:gap-6 px-6 py-4 overflow-x-auto no-scrollbar w-full justify-center">
             {AGENT_ROSTER.map((agent) => (
-               <div key={agent} className={`transition-all duration-500 transform ${stage === 'summoning' ? 'opacity-0 translate-y-[-50px]' : 'opacity-100 translate-y-0'}`}>
-                 <AgentAvatar 
-                   type={agent} 
-                   size="md" 
-                   status={activeAgent === agent ? 'speaking' : thinkingAgent === agent ? 'thinking' : 'idle'} 
-                   showName={true}
-                 />
-               </div>
+              <div
+                key={agent}
+                className={`transition-all duration-500 transform ${stage === "summoning" ? "opacity-0 translate-y-[-50px]" : "opacity-100 translate-y-0"}`}>
+                <AgentAvatar
+                  type={agent}
+                  size="md"
+                  status={
+                    activeAgent === agent
+                      ? "speaking"
+                      : thinkingAgent === agent
+                        ? "thinking"
+                        : "idle"
+                  }
+                  showName={true}
+                />
+              </div>
             ))}
           </div>
         </div>
 
         {/* Chat Stream */}
         <div className="flex-1 overflow-y-auto pt-40 pb-32 px-4 md:px-12 scroll-smooth">
-          {stage === 'summoning' && (
-             <div className="h-full flex flex-col items-center justify-center opacity-60">
-                <BrainCircuit size={64} className="text-slate-300 animate-pulse mb-4" />
-                <p className="text-slate-400 font-light">Establishing Neural Link...</p>
-             </div>
+          {stage === "summoning" && (
+            <div className="h-full flex flex-col items-center justify-center opacity-60">
+              <BrainCircuit
+                size={64}
+                className="text-slate-300 animate-pulse mb-4"
+              />
+              <p className="text-slate-400 font-light">
+                Establishing Neural Link...
+              </p>
+            </div>
           )}
 
           <div className="max-w-4xl mx-auto space-y-6">
             {messages.map((msg) => (
               <AgentMessage key={msg.id} message={msg} isNew={true} />
             ))}
-            
+
             {/* Thinking Indicator in Stream */}
             {thinkingAgent && (
               <div className="flex gap-4 w-full max-w-4xl mx-auto animate-pulse opacity-70">
-                 <div className="flex-shrink-0 mt-1">
-                   <AgentAvatar type={thinkingAgent} size="sm" status="thinking" />
-                 </div>
-                 <div className="flex items-center text-slate-400 text-sm font-medium italic">
-                   {thinkingAgent} agent is analyzing...
-                 </div>
+                <div className="flex-shrink-0 mt-1">
+                  <AgentAvatar
+                    type={thinkingAgent}
+                    size="sm"
+                    status="thinking"
+                  />
+                </div>
+                <div className="flex items-center text-slate-400 text-sm font-medium italic">
+                  {thinkingAgent} agent is analyzing...
+                </div>
               </div>
             )}
             <div ref={scrollRef} />
@@ -252,14 +397,15 @@ export default function OrchestrationView({ prompt }: OrchestrationViewProps) {
         </div>
 
         {/* Action Bar (Floating at bottom of left panel) */}
-        {stage === 'waiting_for_user' && (
+        {stage === "waiting_for_user" && (
           <div className="absolute bottom-8 left-0 right-0 flex justify-center z-20">
-             <button 
+            <button
               onClick={handleCrossImpact}
-              className="group flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-full shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all duration-300 ring-4 ring-white/50"
-            >
+              className="group flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-full shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all duration-300 ring-4 ring-white/50">
               <BrainCircuit size={20} className="text-sky-400" />
-              <span className="font-semibold text-lg">Run Cross-Impact Analysis</span>
+              <span className="font-semibold text-lg">
+                Run Cross-Impact Analysis
+              </span>
               <ChevronRight className="group-hover:translate-x-1 transition-transform" />
             </button>
           </div>
@@ -268,16 +414,15 @@ export default function OrchestrationView({ prompt }: OrchestrationViewProps) {
 
       {/* --- Right Side: Arbitrator Panel (25% or fixed width) --- */}
       <div className="w-[350px] md:w-[28%] flex-shrink-0 relative z-30 h-full hidden md:block">
-        <ArbitratorPanel 
+        <ArbitratorPanel
           stage={stage}
           liveAnalysis={arbitratorAnalysis}
-          solutions={ARBITRATOR_SOLUTIONS}
+          solutions={solutions}
           onSelectSolution={handleSolutionSelect}
           onOverride={handleOverride}
           selectedSolutionId={selectedSolutionId}
         />
       </div>
-
     </div>
   );
 }

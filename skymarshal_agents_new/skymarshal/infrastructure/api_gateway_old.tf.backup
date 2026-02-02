@@ -1,0 +1,451 @@
+# Terraform configuration for AgentCore REST API
+# This creates API Gateway, Lambda functions, and DynamoDB table
+
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# Variables
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "agentcore_runtime_arn" {
+  description = "ARN of the AgentCore Runtime"
+  type        = string
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  default     = "dev"
+}
+
+# DynamoDB Table for Sessions
+resource "aws_dynamodb_table" "sessions" {
+  name           = "skymarshal-sessions-${var.environment}"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "session_id"
+  range_key      = "timestamp"
+
+  attribute {
+    name = "session_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "timestamp"
+    type = "N"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  tags = {
+    Name        = "skymarshal-sessions"
+    Environment = var.environment
+  }
+}
+
+# IAM Role for Lambda
+resource "aws_iam_role" "lambda_role" {
+  name = "skymarshal-api-lambda-role-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# IAM Policy for Lambda
+resource "aws_iam_role_policy" "lambda_policy" {
+  name = "skymarshal-api-lambda-policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:InvokeRuntime",
+          "bedrock-agentcore:InvokeAgentRuntime",
+          "bedrock-agentcore:GetRuntime"
+        ]
+        Resource = "${var.agentcore_runtime_arn}*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+          "dynamodb:UpdateItem",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = aws_dynamodb_table.sessions.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
+
+# Lambda Function - Invoke Handler
+resource "aws_lambda_function" "invoke_handler" {
+  filename      = "../build/lambda_package.zip"
+  function_name = "skymarshal-api-invoke-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "src.api.lambda_handler.lambda_handler"
+  runtime       = "python3.11"
+  timeout       = 300
+  memory_size   = 512
+
+  environment {
+    variables = {
+      AGENTCORE_RUNTIME_ARN = var.agentcore_runtime_arn
+      SKYMARSHAL_AWS_REGION = var.aws_region
+      SESSION_TABLE_NAME    = aws_dynamodb_table.sessions.name
+      LOG_LEVEL             = "INFO"
+      RESPONSE_MODE         = "buffered"
+    }
+  }
+
+  reserved_concurrent_executions = 10
+
+  tags = {
+    Name        = "skymarshal-api-invoke"
+    Environment = var.environment
+  }
+}
+
+# Lambda Function - Health Check
+resource "aws_lambda_function" "health_handler" {
+  filename      = "../build/lambda_package.zip"
+  function_name = "skymarshal-api-health-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "src.api.health.health_check_handler"
+  runtime       = "python3.11"
+  timeout       = 30
+  memory_size   = 256
+
+  environment {
+    variables = {
+      AGENTCORE_RUNTIME_ARN = var.agentcore_runtime_arn
+      SKYMARSHAL_AWS_REGION = var.aws_region
+      SESSION_TABLE_NAME    = aws_dynamodb_table.sessions.name
+    }
+  }
+
+  tags = {
+    Name        = "skymarshal-api-health"
+    Environment = var.environment
+  }
+}
+
+# API Gateway REST API
+resource "aws_api_gateway_rest_api" "api" {
+  name        = "skymarshal-api-${var.environment}"
+  description = "REST API for SkyMarshal AgentCore Runtime"
+
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+}
+
+# API Gateway Resource - /api
+resource "aws_api_gateway_resource" "api" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
+  path_part   = "api"
+}
+
+# API Gateway Resource - /api/v1
+resource "aws_api_gateway_resource" "v1" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.api.id
+  path_part   = "v1"
+}
+
+# API Gateway Resource - /api/v1/invoke
+resource "aws_api_gateway_resource" "invoke" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "invoke"
+}
+
+# API Gateway Resource - /api/v1/health
+resource "aws_api_gateway_resource" "health" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "health"
+}
+
+# API Gateway Method - POST /api/v1/invoke
+resource "aws_api_gateway_method" "invoke_post" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.invoke.id
+  http_method   = "POST"
+  authorization = "NONE"  # Temporarily disabled for frontend testing
+  # authorization = "AWS_IAM"  # TODO: Re-enable for production
+}
+
+# API Gateway Method - OPTIONS /api/v1/invoke (for CORS preflight)
+resource "aws_api_gateway_method" "invoke_options" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.invoke.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# API Gateway Integration - OPTIONS /api/v1/invoke (CORS preflight response)
+resource "aws_api_gateway_integration" "invoke_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.invoke.id
+  http_method = aws_api_gateway_method.invoke_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+# API Gateway Method Response - OPTIONS /api/v1/invoke
+resource "aws_api_gateway_method_response" "invoke_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.invoke.id
+  http_method = aws_api_gateway_method.invoke_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+  
+  response_models = {
+    "application/json" = "Empty"
+  }
+}
+
+# API Gateway Integration Response - OPTIONS /api/v1/invoke
+resource "aws_api_gateway_integration_response" "invoke_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.invoke.id
+  http_method = aws_api_gateway_method.invoke_options.http_method
+  status_code = aws_api_gateway_method_response.invoke_options.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+}
+
+# API Gateway Method Response - POST /api/v1/invoke (add CORS headers)
+resource "aws_api_gateway_method_response" "invoke_post" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.invoke.id
+  http_method = aws_api_gateway_method.invoke_post.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+# API Gateway Integration Response - POST /api/v1/invoke (add CORS headers)
+resource "aws_api_gateway_integration_response" "invoke_post" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.invoke.id
+  http_method = aws_api_gateway_method.invoke_post.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+  }
+  
+  depends_on = [
+    aws_api_gateway_integration.invoke_lambda,
+    aws_api_gateway_method_response.invoke_post
+  ]
+}
+
+# API Gateway Method - GET /api/v1/health
+resource "aws_api_gateway_method" "health_get" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.health.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+# API Gateway Method - OPTIONS /api/v1/health (for CORS preflight)
+resource "aws_api_gateway_method" "health_options" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.health.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# API Gateway Integration - OPTIONS /api/v1/health (CORS preflight response)
+resource "aws_api_gateway_integration" "health_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.health.id
+  http_method = aws_api_gateway_method.health_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+# API Gateway Method Response - OPTIONS /api/v1/health
+resource "aws_api_gateway_method_response" "health_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.health.id
+  http_method = aws_api_gateway_method.health_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+  
+  response_models = {
+    "application/json" = "Empty"
+  }
+}
+
+# API Gateway Integration Response - OPTIONS /api/v1/health
+resource "aws_api_gateway_integration_response" "health_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.health.id
+  http_method = aws_api_gateway_method.health_options.http_method
+  status_code = aws_api_gateway_method_response.health_options.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+}
+
+# API Gateway Integration - Invoke Lambda
+resource "aws_api_gateway_integration" "invoke_lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.invoke.id
+  http_method             = aws_api_gateway_method.invoke_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.invoke_handler.invoke_arn
+  timeout_milliseconds    = 29000  # Maximum API Gateway timeout
+}
+
+# API Gateway Integration - Health Lambda
+resource "aws_api_gateway_integration" "health_lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.health.id
+  http_method             = aws_api_gateway_method.health_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.health_handler.invoke_arn
+}
+
+# Lambda Permission - API Gateway to Invoke Lambda
+resource "aws_lambda_permission" "invoke_apigw" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.invoke_handler.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "health_apigw" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.health_handler.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*"
+}
+
+# API Gateway Deployment
+resource "aws_api_gateway_deployment" "api" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+
+  depends_on = [
+    aws_api_gateway_integration.invoke_lambda,
+    aws_api_gateway_integration.health_lambda
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# API Gateway Stage
+resource "aws_api_gateway_stage" "api" {
+  deployment_id = aws_api_gateway_deployment.api.id
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  stage_name    = var.environment
+}
+
+# API Gateway Method Settings for Rate Limiting
+resource "aws_api_gateway_method_settings" "api" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.api.stage_name
+  method_path = "*/*"
+
+  settings {
+    throttling_burst_limit = 200
+    throttling_rate_limit  = 100
+  }
+}
+
+# Outputs
+output "api_endpoint" {
+  description = "API Gateway endpoint URL"
+  value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1"
+}
+
+output "invoke_url" {
+  description = "Full invoke endpoint URL"
+  value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1/invoke"
+}
+
+output "health_url" {
+  description = "Health check endpoint URL"
+  value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1/health"
+}
+
+output "dynamodb_table_name" {
+  description = "DynamoDB table name for sessions"
+  value       = aws_dynamodb_table.sessions.name
+}

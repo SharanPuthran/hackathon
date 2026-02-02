@@ -12,14 +12,18 @@ dependencies = [
     "aws-opentelemetry-distro>=0.10.0",
     "bedrock-agentcore>=1.2.0",
     "bedrock-agentcore-starter-toolkit>=0.2.8",
+    "boto3>=1.35.0",
     "langchain>=1.2.7",
     "langchain-aws>=1.2.2",
     "langchain-mcp-adapters>=0.2.1",
     "langgraph>=1.0.7",
+    "langgraph-checkpoint-aws>=1.0.4",
     "mcp>=1.26.0",
     "numpy>=2.2,<2.3",
+    "pydantic>=2.10.0",
     "python-dotenv>=1.2.1",
     "tiktoken>=0.11.0",
+    "websockets>=14.0",
 ]
 
 [dependency-groups]

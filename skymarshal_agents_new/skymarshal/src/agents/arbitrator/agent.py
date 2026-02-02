@@ -36,13 +36,21 @@ from agents.schemas import (
     ArbitratorOutput,
     RecoverySolution,
     RecoveryPlan,
-    RecoveryStep
+    RecoveryStep,
+    AgentEvolution,
+    RecommendationEvolution
 )
 
 # Import scoring functions
 from agents.scoring import score_solution
 
+# Import knowledge base client for historical precedent
+from agents.arbitrator.knowledge_base import get_knowledge_base_client
+
 logger = logging.getLogger(__name__)
+
+# Knowledge Base ID for historical disruption data
+KNOWLEDGE_BASE_ID = "UDONMVCXEW"
 
 # Claude Opus 4.5 cross-region inference profile
 OPUS_MODEL_ID = "us.anthropic.claude-opus-4-5-20250514-v1:0"
@@ -53,6 +61,46 @@ SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 # ============================================================================
 # System Prompt for Arbitrator
 # ============================================================================
+
+PHASE_EVOLUTION_INSTRUCTIONS = """
+## Phase Evolution Analysis (When Both Phases Available)
+
+When you receive both Phase 1 (initial) and Phase 2 (revised) recommendations, you have access to valuable information about how agents' thinking evolved after seeing each other's perspectives. Use this evolution analysis to inform your decision:
+
+### Interpreting Convergence (Positive Signal)
+- **Convergence** occurs when agents revise their recommendations toward consensus with increased confidence
+- This is a STRONG POSITIVE SIGNAL that agents are aligning on the correct approach
+- Weight converged recommendations more heavily in your decision
+- Example: If crew_compliance and maintenance both initially recommended different delays but converged to the same 4-hour delay in Phase 2, this suggests 4 hours is the optimal solution
+
+### Investigating Divergence (Warning Signal)
+- **Divergence** occurs when agents revise their recommendations away from consensus with decreased confidence
+- This is a WARNING SIGNAL that may indicate:
+  - Conflicting constraints that need resolution
+  - Missing information that agents discovered during revision
+  - Genuine trade-offs with no clear optimal solution
+- Investigate divergence patterns carefully and document why agents moved apart
+- Example: If network agent initially recommended 2-hour delay but revised to cancellation after seeing crew constraints, this divergence reveals a fundamental conflict
+
+### Weighting Stable Recommendations (High Confidence)
+- **Stable recommendations** (unchanged between phases) indicate high agent confidence
+- Agents who maintain their recommendation after seeing others' perspectives are signaling strong conviction
+- Weight stable safety constraints as NON-NEGOTIABLE - if a safety agent didn't revise after seeing business impacts, the constraint is firm
+- Example: If regulatory agent maintains "curfew violation - cannot depart after 23:00" in both phases, this is an absolute constraint
+
+### Documenting Phase Evolution in Reasoning
+- Always reference phase evolution in your reasoning section
+- Explain which agents converged, diverged, or remained stable
+- Justify how evolution patterns influenced your final decision
+- Example reasoning: "Convergence between crew_compliance and maintenance on 4-hour delay (both increased confidence to 0.95) provides strong evidence this is the optimal solution. Network agent's divergence toward cancellation reflects genuine trade-off between crew safety and network impact, resolved in favor of safety per Rule 1."
+
+### Evolution Metadata
+- Use the `recommendation_evolution` field to document evolution analysis
+- Set `phases_considered` to ["phase1", "phase2"] when both phases available
+- Include evolution summary in your justification
+
+Remember: Phase evolution analysis is ONLY available when both Phase 1 and Phase 2 recommendations are provided. If only Phase 2 is available (legacy mode), proceed with standard arbitration without evolution analysis.
+"""
 
 ARBITRATOR_SYSTEM_PROMPT = """You are the SkyMarshal Arbitrator Agent, the central orchestration and decision-making component in the SkyMarshal agentic disruption and recovery management system. You sit at the intersection of the Safety & Compliance layer (which publishes binding constraints) and the Business Optimization layer (which proposes recovery scenarios), serving as the intelligent coordinator that validates, scores, ranks, and recommends recovery scenarios for human approval.
 
@@ -80,12 +128,12 @@ The human decision maker will choose from your ranked options based on their pri
 - Provide full explainability and audit trails to support regulatory compliance
 - Your decision is authoritative but requires human approval before execution
 
-### Historical Knowledge Integration
-- You have access to AWS Bedrock Knowledge Base (ID: UDONMVCXEW)
-- Historical learning is stored in S3 bucket: skymarshal-prod-knowledge-base-368613657554
-- ALWAYS consider historical patterns and past disruption outcomes when making recommendations
-- Leverage success rates from similar past events to inform your decisions
-- Weight recent events more heavily than older events when applying historical adjustments
+### Operational Procedures Reference
+- You have access to AWS Bedrock Knowledge Base (ID: UDONMVCXEW) containing operational documentation
+- The Knowledge Base contains: Process Manual - Network Operations, Operation Control Manual (OCM), Standard Operating Procedures (SOPs), Disruption Management Protocols, and Recovery Workflows
+- ALWAYS reference these operational procedures when making decisions, just like a duty manager would consult manuals
+- Ensure your recommendations align with established airline operational standards and protocols
+- Cite specific procedures or guidelines when they inform your decision
 
 ## Your Responsibilities
 
@@ -380,18 +428,17 @@ All three solutions satisfy the binding constraint "Crew must have 10 hours rest
 
 ## Knowledge Base Integration
 
-You have access to historical disruption data through AWS Bedrock Knowledge Base:
+You have access to operational documentation through AWS Bedrock Knowledge Base:
 - **Knowledge Base ID**: UDONMVCXEW
-- **S3 Bucket**: skymarshal-prod-knowledge-base-368613657554
-- **Update Frequency**: Regular synchronization with historical learning
+- **Contents**: Process Manual - Network Operations, Operation Control Manual (OCM), Standard Operating Procedures (SOPs), Disruption Management Protocols, Recovery Workflows
 
 When making decisions:
-1. Query knowledge base for similar past disruption events
-2. Consider success rates and outcomes from historical data
-3. Apply lessons learned from past events
-4. Weight recent events more heavily than older events
-5. Document how historical knowledge influenced your decision
-6. Note when no historical precedent exists
+1. Query knowledge base for relevant operational procedures and guidelines
+2. Reference SOPs and protocols that apply to the disruption type
+3. Ensure recommendations align with established operational standards
+4. Cite specific procedures when they inform your decision
+5. Document which operational guidelines were considered
+6. Note when no specific procedures are found for the scenario
 
 ## Your Authority and Limitations
 
@@ -408,9 +455,11 @@ When making decisions:
 - Override safety constraints for business reasons
 - Approve scenarios that violate binding constraints
 - Make decisions without considering all agent inputs
-- Ignore historical knowledge and past learnings
+- Ignore operational procedures and guidelines
 
-**Remember**: You are the final decision-maker for recommendations, but the Duty Manager has final approval authority. Your role is to provide the best possible recommendation with full transparency and explainability to support informed human decision-making."""
+**Remember**: You are the final decision-maker for recommendations, but the Duty Manager has final approval authority. Your role is to provide the best possible recommendation with full transparency and explainability to support informed human decision-making.
+
+""" + PHASE_EVOLUTION_INSTRUCTIONS
 
 
 # ============================================================================
@@ -624,6 +673,396 @@ def _format_agent_responses(responses: Dict[str, Any]) -> str:
     return "\n".join(formatted)
 
 
+def _infer_disruption_type(responses: Dict[str, Any]) -> str:
+    """
+    Infer the disruption type from agent responses.
+    
+    Analyzes agent recommendations and reasoning to determine
+    the primary type of disruption being handled.
+    
+    Args:
+        responses: Dict of agent responses
+        
+    Returns:
+        str: Inferred disruption type
+    """
+    # Keywords to look for in responses
+    disruption_keywords = {
+        'crew FDP violation': ['fdp', 'duty time', 'crew rest', 'duty period', 'fatigue'],
+        'mechanical failure': ['mechanical', 'technical', 'aircraft fault', 'maintenance required', 'mel'],
+        'weather disruption': ['weather', 'storm', 'visibility', 'wind', 'fog', 'snow'],
+        'crew shortage': ['crew shortage', 'crew unavailable', 'no crew', 'crew sick'],
+        'regulatory constraint': ['curfew', 'slot', 'regulatory', 'noise restriction'],
+        'passenger delay': ['delay', 'late', 'connection', 'missed connection'],
+        'cargo issue': ['cargo', 'freight', 'cold chain', 'perishable', 'dangerous goods']
+    }
+    
+    # Aggregate all text from responses
+    all_text = ""
+    for agent_name, response in responses.items():
+        if isinstance(response, dict):
+            all_text += f" {response.get('recommendation', '')} {response.get('reasoning', '')}"
+        else:
+            all_text += f" {str(response)}"
+    
+    all_text = all_text.lower()
+    
+    # Score each disruption type
+    scores = {}
+    for disruption_type, keywords in disruption_keywords.items():
+        score = sum(1 for kw in keywords if kw in all_text)
+        if score > 0:
+            scores[disruption_type] = score
+    
+    # Return the highest scoring type, or generic if none found
+    if scores:
+        return max(scores, key=scores.get)
+    return "flight disruption"
+
+
+def _format_operational_context(procedures: Dict[str, Any]) -> str:
+    """
+    Format operational procedures data for inclusion in the arbitrator prompt.
+    
+    Args:
+        procedures: Operational procedures data from knowledge base
+        
+    Returns:
+        str: Formatted operational context section
+    """
+    if not procedures or not procedures.get('procedures'):
+        return ""
+    
+    lines = [
+        "\n## Operational Procedures Reference (from Knowledge Base)",
+        f"\n**Knowledge Base ID**: {KNOWLEDGE_BASE_ID}",
+        f"**Documents Found**: {procedures.get('documents_found', 0)}",
+        f"**Applicable Protocols**: {', '.join(procedures.get('applicable_protocols', [])[:5]) or 'None identified'}",
+    ]
+    
+    # Add decision guidance summary
+    guidance = procedures.get('decision_guidance', '')
+    if guidance:
+        lines.append(f"\n### Decision Guidance")
+        lines.append(guidance)
+    
+    # Add relevant procedure excerpts
+    proc_list = procedures.get('procedures', [])
+    if proc_list:
+        lines.append(f"\n### Relevant Operational Documents")
+        for i, proc in enumerate(proc_list[:3], 1):  # Limit to 3 documents
+            doc_type = proc.get('document_type', 'Document')
+            score = proc.get('relevance_score', 0.0)
+            content = proc.get('content', '')[:400]  # First 400 chars
+            source = proc.get('source', 'Unknown')
+            
+            lines.append(f"\n**{i}. {doc_type}** (Relevance: {score:.0%})")
+            lines.append(f"Source: {source}")
+            lines.append(f"Content: {content}...")
+    
+    lines.append("\n**Note**: Apply these operational procedures and guidelines when making your decision. Ensure recommendations align with established airline protocols.")
+    
+    return "\n".join(lines)
+
+
+# ============================================================================
+# Phase Evolution Helper Functions (Dual-Phase Input Enhancement)
+# ============================================================================
+
+
+def _format_phase_comparison(
+    initial_responses: Dict[str, Any],
+    revised_responses: Dict[str, Any]
+) -> str:
+    """
+    Format a comparison of Phase 1 vs Phase 2 recommendations.
+    
+    Generates a structured comparison showing:
+    - Which agents changed recommendations
+    - Direction of change (converged/diverged/unchanged)
+    - Confidence score changes
+    - Binding constraint changes
+    
+    Args:
+        initial_responses: Dict of Phase 1 agent responses
+        revised_responses: Dict of Phase 2 agent responses
+        
+    Returns:
+        str: Formatted comparison text for arbitrator prompt
+    """
+    lines = [
+        "\n## Phase Evolution Analysis (Phase 1 → Phase 2)",
+        "\nThis section shows how agent recommendations evolved between the initial phase and revision phase.",
+        ""
+    ]
+    
+    # Get all unique agent names from both phases
+    all_agents = set(initial_responses.keys()) | set(revised_responses.keys())
+    
+    # Categorize agents by change type
+    unchanged_agents = []
+    changed_agents = []
+    new_agents = []
+    dropped_agents = []
+    
+    for agent_name in sorted(all_agents):
+        initial = initial_responses.get(agent_name)
+        revised = revised_responses.get(agent_name)
+        
+        if initial is None and revised is not None:
+            new_agents.append((agent_name, revised))
+        elif initial is not None and revised is None:
+            dropped_agents.append((agent_name, initial))
+        elif initial is not None and revised is not None:
+            # Compare recommendations
+            initial_rec = initial.get('recommendation', '') if isinstance(initial, dict) else str(initial)
+            revised_rec = revised.get('recommendation', '') if isinstance(revised, dict) else str(revised)
+            
+            if initial_rec.strip().lower() == revised_rec.strip().lower():
+                unchanged_agents.append((agent_name, initial, revised))
+            else:
+                changed_agents.append((agent_name, initial, revised))
+    
+    # Format changed agents (most important)
+    if changed_agents:
+        lines.append("### Agents That Changed Recommendations")
+        lines.append("")
+        for agent_name, initial, revised in changed_agents:
+            initial_rec = initial.get('recommendation', 'N/A') if isinstance(initial, dict) else str(initial)
+            revised_rec = revised.get('recommendation', 'N/A') if isinstance(revised, dict) else str(revised)
+            initial_conf = initial.get('confidence', 0.0) if isinstance(initial, dict) else 0.0
+            revised_conf = revised.get('confidence', 0.0) if isinstance(revised, dict) else 0.0
+            
+            # Determine change direction
+            conf_change = revised_conf - initial_conf
+            if conf_change > 0.1:
+                direction = "↑ CONVERGED (confidence increased)"
+            elif conf_change < -0.1:
+                direction = "↓ DIVERGED (confidence decreased)"
+            else:
+                direction = "→ REVISED (confidence stable)"
+            
+            lines.append(f"**{agent_name.replace('_', ' ').title()}** - {direction}")
+            lines.append(f"  - Phase 1: {initial_rec[:200]}...")
+            lines.append(f"  - Phase 2: {revised_rec[:200]}...")
+            lines.append(f"  - Confidence: {initial_conf:.2f} → {revised_conf:.2f}")
+            
+            # Check for binding constraint changes
+            initial_constraints = set(initial.get('binding_constraints', []) if isinstance(initial, dict) else [])
+            revised_constraints = set(revised.get('binding_constraints', []) if isinstance(revised, dict) else [])
+            added = revised_constraints - initial_constraints
+            removed = initial_constraints - revised_constraints
+            
+            if added:
+                lines.append(f"  - **NEW CONSTRAINTS**: {', '.join(added)}")
+            if removed:
+                lines.append(f"  - Removed constraints: {', '.join(removed)}")
+            lines.append("")
+    
+    # Format unchanged agents
+    if unchanged_agents:
+        lines.append("### Agents With Stable Recommendations")
+        lines.append("(High confidence signal - recommendation unchanged after seeing others)")
+        lines.append("")
+        for agent_name, initial, revised in unchanged_agents:
+            revised_rec = revised.get('recommendation', 'N/A') if isinstance(revised, dict) else str(revised)
+            revised_conf = revised.get('confidence', 0.0) if isinstance(revised, dict) else 0.0
+            lines.append(f"- **{agent_name.replace('_', ' ').title()}**: {revised_rec[:100]}... (confidence: {revised_conf:.2f})")
+        lines.append("")
+    
+    # Format new agents (only in Phase 2)
+    if new_agents:
+        lines.append("### Agents New in Revision Phase")
+        lines.append("")
+        for agent_name, revised in new_agents:
+            revised_rec = revised.get('recommendation', 'N/A') if isinstance(revised, dict) else str(revised)
+            lines.append(f"- **{agent_name.replace('_', ' ').title()}**: {revised_rec[:100]}...")
+        lines.append("")
+    
+    # Format dropped agents (only in Phase 1)
+    if dropped_agents:
+        lines.append("### Agents Dropped in Revision Phase")
+        lines.append("(Warning: These agents did not complete revision)")
+        lines.append("")
+        for agent_name, initial in dropped_agents:
+            initial_rec = initial.get('recommendation', 'N/A') if isinstance(initial, dict) else str(initial)
+            lines.append(f"- **{agent_name.replace('_', ' ').title()}**: {initial_rec[:100]}...")
+        lines.append("")
+    
+    # Summary
+    lines.append("### Evolution Summary")
+    lines.append(f"- Total agents: {len(all_agents)}")
+    lines.append(f"- Changed recommendations: {len(changed_agents)}")
+    lines.append(f"- Stable recommendations: {len(unchanged_agents)}")
+    lines.append(f"- New in revision: {len(new_agents)}")
+    lines.append(f"- Dropped in revision: {len(dropped_agents)}")
+    
+    return "\n".join(lines)
+
+
+def _analyze_recommendation_evolution(
+    initial_responses: Dict[str, Any],
+    revised_responses: Dict[str, Any]
+) -> List[AgentEvolution]:
+    """
+    Analyze how recommendations evolved between phases.
+    
+    Returns a list of evolution records for each agent,
+    including before/after summaries and change classification.
+    
+    Args:
+        initial_responses: Dict of Phase 1 agent responses
+        revised_responses: Dict of Phase 2 agent responses
+        
+    Returns:
+        List of AgentEvolution records
+    """
+    evolution_details = []
+    
+    # Get all unique agent names from both phases
+    all_agents = set(initial_responses.keys()) | set(revised_responses.keys())
+    
+    for agent_name in sorted(all_agents):
+        initial = initial_responses.get(agent_name)
+        revised = revised_responses.get(agent_name)
+        
+        # Extract values from responses
+        if initial is not None:
+            if isinstance(initial, dict):
+                phase1_rec = initial.get('recommendation', '')
+                phase1_conf = initial.get('confidence', 0.0)
+                phase1_constraints = set(initial.get('binding_constraints', []))
+            else:
+                phase1_rec = str(initial)
+                phase1_conf = 0.5
+                phase1_constraints = set()
+        else:
+            phase1_rec = None
+            phase1_conf = None
+            phase1_constraints = set()
+        
+        if revised is not None:
+            if isinstance(revised, dict):
+                phase2_rec = revised.get('recommendation', '')
+                phase2_conf = revised.get('confidence', 0.0)
+                phase2_constraints = set(revised.get('binding_constraints', []))
+            else:
+                phase2_rec = str(revised)
+                phase2_conf = 0.5
+                phase2_constraints = set()
+        else:
+            phase2_rec = ''
+            phase2_conf = 0.0
+            phase2_constraints = set()
+        
+        # Determine change type
+        if initial is None and revised is not None:
+            change_type = "new_in_phase2"
+            change_summary = f"{agent_name} only present in Phase 2 (revision phase)"
+        elif initial is not None and revised is None:
+            change_type = "dropped_in_phase2"
+            change_summary = f"{agent_name} only present in Phase 1 (dropped in revision)"
+            phase2_rec = phase1_rec or ''  # Use Phase 1 rec for dropped agents
+            phase2_conf = phase1_conf or 0.0
+        elif phase1_rec and phase2_rec:
+            # Compare recommendations
+            if phase1_rec.strip().lower() == phase2_rec.strip().lower():
+                change_type = "unchanged"
+                change_summary = f"{agent_name} maintained recommendation (high confidence signal)"
+            else:
+                # Determine if converged or diverged based on confidence change
+                conf_change = phase2_conf - (phase1_conf or 0.0)
+                if conf_change > 0.05:
+                    change_type = "converged"
+                    change_summary = f"{agent_name} revised recommendation with increased confidence (convergence)"
+                elif conf_change < -0.05:
+                    change_type = "diverged"
+                    change_summary = f"{agent_name} revised recommendation with decreased confidence (divergence)"
+                else:
+                    change_type = "converged"  # Default to converged for changes
+                    change_summary = f"{agent_name} revised recommendation after seeing other agents"
+        else:
+            change_type = "unchanged"
+            change_summary = f"{agent_name} status unclear"
+        
+        # Calculate constraint changes
+        constraints_added = list(phase2_constraints - phase1_constraints)
+        constraints_removed = list(phase1_constraints - phase2_constraints)
+        
+        evolution = AgentEvolution(
+            agent_name=agent_name,
+            phase1_recommendation=phase1_rec,
+            phase2_recommendation=phase2_rec,
+            phase1_confidence=phase1_conf,
+            phase2_confidence=phase2_conf,
+            change_type=change_type,
+            binding_constraints_added=constraints_added,
+            binding_constraints_removed=constraints_removed,
+            change_summary=change_summary
+        )
+        evolution_details.append(evolution)
+    
+    return evolution_details
+
+
+def _build_recommendation_evolution(
+    evolution_details: List[AgentEvolution],
+    phases_available: List[str]
+) -> RecommendationEvolution:
+    """
+    Build complete RecommendationEvolution model from evolution details.
+    
+    Args:
+        evolution_details: List of AgentEvolution records
+        phases_available: Which phases were provided
+        
+    Returns:
+        RecommendationEvolution model
+    """
+    # Count agents by change type
+    agents_changed = sum(1 for e in evolution_details if e.change_type in ["converged", "diverged"])
+    agents_unchanged = sum(1 for e in evolution_details if e.change_type == "unchanged")
+    
+    # Detect convergence/divergence patterns
+    convergence_count = sum(1 for e in evolution_details if e.change_type == "converged")
+    divergence_count = sum(1 for e in evolution_details if e.change_type == "diverged")
+    
+    convergence_detected = convergence_count > divergence_count and convergence_count > 0
+    divergence_detected = divergence_count > convergence_count and divergence_count > 0
+    
+    # Generate analysis summary
+    total_agents = len(evolution_details)
+    new_count = sum(1 for e in evolution_details if e.change_type == "new_in_phase2")
+    dropped_count = sum(1 for e in evolution_details if e.change_type == "dropped_in_phase2")
+    
+    summary_parts = []
+    if convergence_detected:
+        summary_parts.append(f"{convergence_count} agents converged toward consensus")
+    if divergence_detected:
+        summary_parts.append(f"{divergence_count} agents diverged (potential conflicts)")
+    if agents_unchanged > 0:
+        summary_parts.append(f"{agents_unchanged} agents maintained stable recommendations")
+    if new_count > 0:
+        summary_parts.append(f"{new_count} agents new in revision phase")
+    if dropped_count > 0:
+        summary_parts.append(f"{dropped_count} agents dropped in revision phase")
+    
+    if not summary_parts:
+        summary_parts.append(f"Analyzed {total_agents} agents across phases")
+    
+    analysis_summary = ". ".join(summary_parts) + "."
+    
+    return RecommendationEvolution(
+        phases_available=phases_available,
+        agents_changed=agents_changed,
+        agents_unchanged=agents_unchanged,
+        convergence_detected=convergence_detected,
+        divergence_detected=divergence_detected,
+        evolution_details=evolution_details,
+        analysis_summary=analysis_summary
+    )
+
+
 def _populate_backward_compatible_fields(output: ArbitratorOutput) -> ArbitratorOutput:
     """
     Populate final_decision and recommendations from recommended solution.
@@ -665,7 +1104,8 @@ def _populate_backward_compatible_fields(output: ArbitratorOutput) -> Arbitrator
 
 async def arbitrate(
     revised_recommendations: dict,
-    llm_opus: Optional[Any] = None
+    llm_opus: Optional[Any] = None,
+    initial_recommendations: Optional[dict] = None
 ) -> dict:
     """
     Resolve conflicts and make final decision.
@@ -694,6 +1134,9 @@ async def arbitrate(
             }
         llm_opus: Optional Claude Opus 4.5 model instance. If None, will load
             Opus 4.5 with cross-region inference, falling back to Sonnet if unavailable.
+        initial_recommendations: Optional dict containing Phase 1 (initial) agent responses.
+            When provided, enables phase evolution analysis showing how recommendations
+            changed between Phase 1 and Phase 2. Format same as revised_recommendations.
     
     Returns:
         Dict containing:
@@ -707,7 +1150,9 @@ async def arbitrate(
             "reasoning": str,                    # Detailed reasoning
             "confidence": float,                 # Confidence score (0.0-1.0)
             "timestamp": str,                    # ISO 8601 timestamp
-            "model_used": str                    # Model ID used for arbitration
+            "model_used": str,                   # Model ID used for arbitration
+            "phases_considered": list[str],      # Which phases were analyzed
+            "recommendation_evolution": dict     # Evolution analysis (if initial provided)
         }
     
     Raises:
@@ -796,14 +1241,127 @@ async def arbitrate(
     # Format agent responses for prompt
     formatted_responses = _format_agent_responses(responses_dict)
     
-    # Create arbitration prompt
+    # =========================================================================
+    # Phase Evolution Analysis (Dual-Phase Input Enhancement)
+    # =========================================================================
+    phase_comparison = ""
+    evolution_analysis = None
+    phases_considered = ["phase2"]  # Default to Phase 2 only
+    
+    if initial_recommendations is not None:
+        logger.info("Phase 1 recommendations provided - performing evolution analysis")
+        phases_considered = ["phase1", "phase2"]
+        
+        # Extract initial responses dict (handle both Collation object and dict)
+        if hasattr(initial_recommendations, 'responses'):
+            initial_responses = initial_recommendations.responses
+        elif isinstance(initial_recommendations, dict):
+            initial_responses = initial_recommendations
+        else:
+            logger.warning(f"Invalid initial_recommendations type: {type(initial_recommendations)}")
+            initial_responses = {}
+        
+        # Convert AgentResponse objects to dicts if needed
+        initial_responses_dict = {}
+        for agent_name, response in initial_responses.items():
+            if hasattr(response, 'model_dump'):
+                initial_responses_dict[agent_name] = response.model_dump()
+            elif isinstance(response, dict):
+                initial_responses_dict[agent_name] = response
+            else:
+                initial_responses_dict[agent_name] = {
+                    "recommendation": str(response),
+                    "confidence": 0.5,
+                    "reasoning": "Response format unknown"
+                }
+        
+        # Generate phase comparison text for prompt
+        phase_comparison = _format_phase_comparison(initial_responses_dict, responses_dict)
+        logger.info(f"Phase comparison generated: {len(phase_comparison)} characters")
+        
+        # Analyze recommendation evolution for output
+        evolution_details = _analyze_recommendation_evolution(initial_responses_dict, responses_dict)
+        evolution_analysis = _build_recommendation_evolution(evolution_details, phases_considered)
+        logger.info(
+            f"Evolution analysis: {evolution_analysis.agents_changed} changed, "
+            f"{evolution_analysis.agents_unchanged} unchanged, "
+            f"convergence={evolution_analysis.convergence_detected}, "
+            f"divergence={evolution_analysis.divergence_detected}"
+        )
+    else:
+        logger.info("Phase 1 recommendations not provided - using Phase 2 only (legacy mode)")
+    
+    # =========================================================================
+    # Query Knowledge Base for Operational Procedures
+    # =========================================================================
+    operational_context = ""
+    kb_metadata = {}
+    
+    try:
+        kb_client = get_knowledge_base_client()
+        if kb_client.enabled:
+            logger.info("Querying Knowledge Base for operational procedures...")
+            
+            # Determine disruption type from agent responses
+            disruption_type = _infer_disruption_type(responses_dict)
+            
+            # Extract constraint strings for query
+            constraint_strings = [c['constraint'] for c in binding_constraints]
+            
+            # Build disruption scenario description
+            disruption_scenario = f"Disruption type: {disruption_type}"
+            
+            # Query for operational procedures (SOPs, OCM, Process Manuals)
+            procedures = await kb_client.query_operational_procedures(
+                disruption_scenario=disruption_scenario,
+                binding_constraints=constraint_strings,
+                agent_recommendations=responses_dict
+            )
+            
+            if procedures and procedures.get('procedures'):
+                kb_metadata = {
+                    'knowledge_base_queried': True,
+                    'knowledge_base_id': KNOWLEDGE_BASE_ID,
+                    'documents_found': procedures.get('documents_found', 0),
+                    'applicable_protocols': procedures.get('applicable_protocols', []),
+                    'query_timestamp': procedures.get('timestamp', '')
+                }
+                
+                # Build operational context for the prompt
+                operational_context = _format_operational_context(procedures)
+                logger.info(f"Operational procedures found: {procedures.get('documents_found', 0)} documents")
+            else:
+                kb_metadata = {
+                    'knowledge_base_queried': True,
+                    'knowledge_base_id': KNOWLEDGE_BASE_ID,
+                    'documents_found': 0,
+                    'note': 'No relevant operational procedures found'
+                }
+                logger.info("No relevant operational procedures found in Knowledge Base")
+        else:
+            kb_metadata = {
+                'knowledge_base_queried': False,
+                'note': 'Knowledge Base not enabled'
+            }
+            logger.info("Knowledge Base not enabled - proceeding without operational context")
+            
+    except Exception as e:
+        logger.warning(f"Knowledge Base query failed (non-fatal): {e}")
+        kb_metadata = {
+            'knowledge_base_queried': False,
+            'error': str(e)
+        }
+    
+    # Create arbitration prompt with operational context and phase comparison
     prompt = f"""You are the Arbitrator Agent. Review the following agent recommendations and make the final decision.
 
 {formatted_responses}
+{phase_comparison}
 
 ## Binding Constraints (MUST BE SATISFIED)
 
 {chr(10).join(f"- {c['agent']}: {c['constraint']}" for c in binding_constraints) if binding_constraints else "None"}
+{operational_context}
 
 ## Your Task
 
@@ -812,13 +1370,18 @@ async def arbitrate(
 3. Apply the appropriate decision rule for each conflict
 4. Ensure all binding constraints are satisfied
 5. Generate a final decision with clear recommendations
-6. Provide detailed justification and reasoning
+6. Reference operational procedures and guidelines from the Knowledge Base when making decisions
+7. {"Use phase evolution analysis to inform your decision (see Phase Evolution Analysis section above)" if phase_comparison else "Provide detailed justification and reasoning"}
 
 Remember:
 - Safety constraints are NON-NEGOTIABLE
 - For safety vs safety conflicts, choose the MOST CONSERVATIVE option
 - Document all conflict resolutions
 - Provide actionable recommendations
+- Align decisions with established operational procedures (SOPs, OCM, Process Manuals)
+{"- Weight converged recommendations more heavily (positive signal)" if phase_comparison else ""}
+{"- Investigate divergence patterns carefully (warning signal)" if phase_comparison else ""}
+{"- Treat stable recommendations as high-confidence signals" if phase_comparison else ""}
 
 Generate your decision now."""
     
@@ -840,13 +1403,37 @@ Generate your decision now."""
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         result["model_used"] = model_used
         result["duration_seconds"] = (datetime.now(timezone.utc) - start_time).total_seconds()
+        result["knowledge_base"] = kb_metadata  # Add knowledge base metadata
+        result["knowledgeBaseConsidered"] = kb_metadata.get('knowledge_base_queried', False) and kb_metadata.get('documents_found', 0) > 0
         
-        # Log completion with solution count if available
+        # Add phase evolution analysis if available
+        result["phases_considered"] = phases_considered
+        if evolution_analysis is not None:
+            result["recommendation_evolution"] = evolution_analysis.model_dump()
+            logger.info("Added recommendation evolution to output")
+        
+        # CRITICAL: Validate that solution_options were generated
+        # If LLM failed to generate solutions, log warning but allow fallback to handle it
         solution_count = len(result.get('solution_options', [])) if result.get('solution_options') else 0
+        if solution_count == 0:
+            logger.warning(
+                "Arbitrator returned no solution options. "
+                "This may indicate the LLM was unable to create recovery scenarios. "
+                "Returning result with explicit indication of no solutions."
+            )
+            # Update result to indicate no solutions were generated
+            result["solution_options"] = None
+            result["recommended_solution_id"] = None
+            if "error" not in result:
+                result["error"] = "No valid solution options could be generated by the arbitrator"
+        
+        # Log completion
         logger.info(
             f"Arbitration complete: {solution_count} solutions generated, "
             f"{len(result['conflicts_identified'])} conflicts, "
-            f"confidence={result['confidence']:.2f}"
+            f"confidence={result['confidence']:.2f}, "
+            f"kb_docs={kb_metadata.get('documents_found', 0)}, "
+            f"knowledgeBaseConsidered={result['knowledgeBaseConsidered']}"
         )
         
         return result
@@ -902,25 +1489,40 @@ Generate your decision now."""
         
         return {
             "final_decision": (
-                "Unable to complete arbitration due to system error. "
-                "Recommend manual review and conservative approach: "
-                "satisfy all safety constraints and minimize operational risk."
+                "ARBITRATION FAILED: Unable to generate valid recovery solutions. "
+                "The system could not create recovery scenarios that satisfy all constraints. "
+                "Manual review by duty manager is required to assess the situation and determine appropriate action."
             ),
             "recommendations": [
-                "Manual review required",
-                "Satisfy all safety agent binding constraints",
-                "Choose most conservative option"
+                "IMMEDIATE ACTION: Manual review required by duty manager",
+                "Verify all safety agent binding constraints are understood",
+                "Assess if constraints are conflicting or if additional data is needed",
+                "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
+                "Document the reason for arbitration failure for system improvement"
             ],
             "conflicts_identified": [],
             "conflict_resolutions": [],
             "safety_overrides": [],
-            "justification": f"Arbitration system error: {str(e)}",
-            "reasoning": "Fallback to conservative decision due to arbitration failure",
+            "justification": (
+                f"Arbitration system error: {str(e)}. "
+                "The arbitrator was unable to generate valid solution options. "
+                "This may indicate conflicting binding constraints, insufficient data from agents, "
+                "or a system error in the LLM generation process. "
+                "No automated solutions can be provided - manual intervention is required."
+            ),
+            "reasoning": (
+                "Fallback to manual review due to arbitration failure. "
+                "The system cannot provide automated recovery solutions when the arbitrator "
+                "fails to generate valid options. This is a conservative safety measure to ensure "
+                "human oversight when automated decision-making is not possible."
+            ),
             "confidence": 0.0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "model_used": model_used or "none",
             "duration_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-            "solution_options": [fallback_solution],
-            "recommended_solution_id": 1,
-            "error": str(e)
+            "knowledge_base": kb_metadata,
+            "knowledgeBaseConsidered": kb_metadata.get('knowledge_base_queried', False) and kb_metadata.get('documents_found', 0) > 0,
+            "solution_options": None,  # Explicitly None - no solutions generated
+            "recommended_solution_id": None,  # No recommendation possible
+            "error": f"Arbitration failed: {str(e)}. No valid solution options could be generated."
         }

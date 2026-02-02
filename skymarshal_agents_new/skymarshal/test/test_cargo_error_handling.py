@@ -193,7 +193,7 @@ class TestCargoErrorHandling:
                     "agent": "cargo",
                     "assessment": "CANNOT_PROCEED",
                     "status": "FAILURE",
-                    "failure_reason": "Database query timeout after 30 seconds",
+                    "failure_reason": "Database query timeout after 60 seconds",
                     "attempted_tools": ["query_flight", "query_cargo_manifest"],
                     "recommendations": ["Retry the request", "Check database connectivity"]
                 })

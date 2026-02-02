@@ -1,0 +1,348 @@
+# Implementation Plan: LangGraph DynamoDB Integration
+
+## Overview
+
+This implementation plan adds LangGraph checkpoint persistence to the SkyMarshal orchestrator while preserving existing operational data access patterns. The integration enables durable state management, failure recovery, and human-in-the-loop workflows across the three-phase orchestration.
+
+## Tasks
+
+- [x] 1. Set up checkpoint infrastructure and dependencies
+  - Install `langgraph-checkpoint-aws` library via UV
+  - Create DynamoDB table for checkpoints with PK, SK, and TTL attributes
+  - Create S3 bucket for large checkpoint payloads (≥350KB)
+  - Configure IAM permissions for DynamoDB and S3 access
+  - Add environment variables for checkpoint configuration (mode, table name, bucket name)
+  - _Requirements: 1.1, 1.2, 1.5_
+
+- [x] 2. Implement CheckpointSaver abstraction layer
+  - [x] 2.1 Create `src/checkpoint/saver.py` with CheckpointSaver class
+    - Implement `__init__` with mode selection (production/development)
+    - Wrap DynamoDBSaver from `langgraph-checkpoint-aws`
+    - Wrap MemorySaver for development mode
+    - Implement mode detection from environment variables
+    - _Requirements: 1.5, 9.1, 9.2, 9.3_
+  - [x] 2.2 Implement checkpoint save operations
+    - Implement `save_checkpoint` method with size-based routing
+    - Route small checkpoints (<350KB) to DynamoDB
+    - Route large checkpoints (≥350KB) to S3 with DynamoDB reference
+    - Add exponential backoff for DynamoDB throttling
+    - Add fallback to in-memory storage on persistent failures
+    - _Requirements: 1.3, 1.4, 12.5_
+  - [x] 2.3 Implement checkpoint load operations
+    - Implement `load_checkpoint` method
+    - Handle DynamoDB reads for small checkpoints
+    - Handle S3 streaming for large checkpoints
+    - Implement transparent payload retrieval
+    - _Requirements: 1.3, 1.4, 12.3_
+  - [x] 2.4 Implement checkpoint query operations
+    - Implement `list_checkpoints` method with timestamp ordering
+    - Implement `get_thread_history` method for audit trails
+    - Support filtering by thread status
+    - _Requirements: 2.3, 2.5, 10.1_
+  - [ ]\* 2.5 Write property test for checkpoint storage routing
+    - **Property 1: Checkpoint Storage Routing**
+    - **Validates: Requirements 1.3, 1.4**
+  - [ ]\* 2.6 Write property test for API consistency across backends
+    - **Property 27: Checkpoint API Consistency**
+    - **Validates: Requirements 9.4**
+
+- [x] 3. Implement ThreadManager for thread lifecycle management
+  - [x] 3.1 Create `src/checkpoint/thread_manager.py` with ThreadManager class
+    - Implement `create_thread` with unique ID generation
+    - Implement `get_thread_status` for status queries
+    - Implement `mark_thread_complete` for successful completion
+    - Implement `mark_thread_failed` for failure tracking
+    - Implement `query_threads` with status filtering
+    - _Requirements: 2.1, 2.4, 2.5_
+  - [ ]\* 3.2 Write property test for thread ID uniqueness
+    - **Property 2: Thread ID Uniqueness**
+    - **Validates: Requirements 2.1**
+  - [ ]\* 3.3 Write property test for thread status transitions
+    - **Property 5: Thread Status Transitions**
+    - **Validates: Requirements 2.4**
+
+- [x] 4. Integrate checkpoint persistence into orchestrator
+  - [x] 4.1 Modify `src/main.py` to initialize checkpoint infrastructure
+    - Add CheckpointSaver initialization in app startup
+    - Add ThreadManager initialization
+    - Detect mode from environment (development/production)
+    - Log active checkpoint backend at startup
+    - _Requirements: 9.3, 9.5_
+  - [x] 4.2 Update `handle_disruption` function for checkpoint integration
+    - Create thread at workflow start
+    - Save initial checkpoint with user prompt
+    - Pass thread_id and checkpoint_saver to phase functions
+    - Mark thread complete on success
+    - Mark thread failed on error with error details
+    - _Requirements: 2.1, 2.4, 4.5_
+  - [x] 4.3 Update Phase 1 (`phase1_initial_recommendations`) with checkpoints
+    - Save checkpoint before phase execution
+    - Pass thread_id to all agents
+    - Save phase completion checkpoint with all agent results
+    - _Requirements: 3.1, 4.1_
+  - [x] 4.4 Update Phase 2 (`phase2_revision_round`) with checkpoints
+    - Load Phase 1 checkpoint
+    - Save checkpoint before phase execution
+    - Pass thread_id and Phase 1 results to all agents
+    - Save phase completion checkpoint with all agent results
+    - _Requirements: 3.1, 4.2, 4.3_
+  - [x] 4.5 Update Phase 3 (`phase3_arbitration`) with checkpoints
+    - Load Phase 1 and Phase 2 checkpoints
+    - Save checkpoint before arbitration
+    - Pass thread_id and all phase results to arbitrator
+    - Save final checkpoint with arbitration decision
+    - _Requirements: 4.3, 4.1, 4.2_
+  - [ ]\* 4.6 Write property test for phase completion checkpoints
+    - **Property 9: Phase Completion Checkpoints**
+    - **Validates: Requirements 4.1, 4.2**
+  - [ ]\* 4.7 Write property test for thread continuity
+    - **Property 12: Thread Continuity**
+    - **Validates: Requirements 4.5**
+
+- [x] 5. Add checkpoint support to agent execution
+  - [x] 5.1 Update `run_agent_safely` function signature
+    - Add optional `thread_id` parameter
+    - Add optional `checkpoint_saver` parameter
+    - Maintain backward compatibility (parameters default to None)
+    - _Requirements: 11.1, 11.4_
+  - [x] 5.2 Add checkpoint save points in agent execution
+    - Save checkpoint at agent start
+    - Save checkpoint at agent completion with results
+    - Save checkpoint on agent error with error details
+    - Include agent name, phase, confidence, and timestamp in metadata
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+  - [x] 5.3 Update all agent function signatures
+    - Add optional `thread_id` parameter to all 7 agent functions
+    - Add optional `checkpoint_saver` parameter to all 7 agent functions
+    - Maintain backward compatibility
+    - _Requirements: 11.1, 11.4_
+  - [ ]\* 5.4 Write property test for agent checkpoint lifecycle
+    - **Property 7: Agent Checkpoint Lifecycle**
+    - **Validates: Requirements 3.1, 3.2, 3.3, 3.4**
+  - [ ]\* 5.5 Write property test for checkpoint metadata completeness
+    - **Property 8: Checkpoint Metadata Completeness**
+    - **Validates: Requirements 3.5, 10.1, 10.2**
+
+- [x] 6. Checkpoint - Ensure basic checkpoint persistence works
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 7. Implement failure recovery mechanisms
+  - [x] 7.1 Create `src/checkpoint/recovery.py` with recovery functions
+    - Implement `recover_from_failure` to load last successful checkpoint
+    - Implement `resume_from_checkpoint` to restore state and continue
+    - Implement `recover_agent` for individual agent recovery
+    - Implement `restart_phase` for phase-level recovery
+    - _Requirements: 4.4, 5.1, 5.2, 5.4_
+  - [x] 7.2 Add recovery logging
+    - Log all recovery attempts with thread_id, checkpoint_id, timestamp
+    - Log recovery success/failure status
+    - Include error details in failure logs
+    - _Requirements: 5.5_
+  - [x] 7.3 Integrate recovery into orchestrator error handling
+    - Catch exceptions in `handle_disruption`
+    - Attempt recovery from last checkpoint
+    - Support parallel agent recovery
+    - Fall back to conservative decision if recovery fails
+    - _Requirements: 5.1, 5.2, 5.3_
+  - [ ]\* 7.4 Write property test for workflow resumption
+    - **Property 11: Workflow Resumption**
+    - **Validates: Requirements 4.4, 5.1, 5.2**
+  - [ ]\* 7.5 Write property test for parallel agent recovery
+    - **Property 13: Parallel Agent Recovery**
+    - **Validates: Requirements 5.3**
+
+- [x] 8. Implement human-in-the-loop approval system
+  - [x] 8.1 Create `src/checkpoint/approval.py` with approval functions
+    - Implement `pause_for_approval` to save checkpoint and pause execution
+    - Implement `get_pending_approval` to retrieve decision via API
+    - Implement `approve_decision` to resume from checkpoint
+    - Implement `reject_decision` to halt execution and mark thread rejected
+    - _Requirements: 6.1, 6.2, 6.3, 6.4_
+  - [x] 8.2 Add approval metadata recording
+    - Record approver ID in checkpoint metadata
+    - Record approval/rejection timestamp
+    - Record approval comments
+    - _Requirements: 6.5_
+  - [x] 8.3 Integrate approval points into arbitrator
+    - Add optional approval pause before final decision
+    - Expose decision via approval API
+    - Support resumption after approval
+    - Support rejection handling
+    - _Requirements: 6.1, 6.2, 6.3, 6.4_
+  - [ ]\* 8.4 Write property test for approval resumption
+    - **Property 18: Approval Resumption**
+    - **Validates: Requirements 6.3**
+  - [ ]\* 8.5 Write property test for rejection handling
+    - **Property 19: Rejection Handling**
+    - **Validates: Requirements 6.4**
+
+- [x] 9. Implement Knowledge Base integration for arbitrator
+  - [x] 9.1 Create `src/agents/arbitrator/knowledge_base.py` with KnowledgeBaseClient
+    - Initialize Bedrock Knowledge Base client
+    - Implement `query_precedent` for regulatory guidance queries
+    - Implement `retrieve_and_generate` for RAG-based responses
+    - Add error handling with fallback to LLM-only reasoning
+    - _Requirements: 7.1, 7.3_
+  - [x] 9.2 Update arbitrator to use Knowledge Base
+    - Query KB for regulatory precedent during arbitration
+    - Include KB results in arbitrator prompt
+    - Include source citations in final decision
+    - Fall back to LLM-only on KB failures
+    - Log KB query failures
+    - _Requirements: 7.1, 7.2, 7.3_
+  - [x] 9.3 Add KB configuration
+    - Add Knowledge Base ID to environment variables
+    - Add IAM permissions for Bedrock Knowledge Base access
+    - Support optional KB (system works without it)
+    - _Requirements: 7.5_
+  - [ ]\* 9.4 Write property test for citation inclusion
+    - **Property 22: Citation Inclusion**
+    - **Validates: Requirements 7.2**
+  - [ ]\* 9.5 Write property test for KB fallback
+    - **Property 23: Knowledge Base Fallback**
+    - **Validates: Requirements 7.3**
+
+- [x] 10. Checkpoint - Ensure advanced features work
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 11. Add audit trail and time-travel debugging features
+  - [x] 11.1 Implement checkpoint history export
+    - Add `export_thread_history` function to export as JSON
+    - Include all checkpoints with full state and metadata
+    - Support filtering by phase or agent
+    - _Requirements: 10.5_
+  - [x] 11.2 Implement workflow replay functionality
+    - Add `replay_from_checkpoint` to load historical checkpoint
+    - Support continuing execution from any checkpoint
+    - Preserve original thread metadata
+    - _Requirements: 10.3_
+  - [x] 11.3 Configure checkpoint TTL
+    - Set default TTL to 90 days for compliance
+    - Support configurable TTL via environment variable
+    - Apply TTL to all new checkpoints
+    - _Requirements: 10.4_
+  - [ ]\* 11.4 Write property test for workflow replay
+    - **Property 29: Workflow Replay**
+    - **Validates: Requirements 10.3**
+  - [ ]\* 11.5 Write property test for checkpoint export
+    - **Property 31: Checkpoint Export**
+    - **Validates: Requirements 10.5**
+
+- [x] 12. Ensure operational data access remains unchanged
+  - [x] 12.1 Verify DynamoDBClient continues to work
+    - Test all existing query methods (crew, maintenance, cargo, etc.)
+    - Verify GSI queries remain efficient
+    - Ensure no changes to operational table schemas
+    - _Requirements: 8.1, 8.2, 8.3, 8.4_
+  - [x] 12.2 Verify LangChain tools continue to work
+    - Test all tool factories (crew_compliance, maintenance, etc.)
+    - Verify tools return correct data format
+    - Ensure no breaking changes to tool interfaces
+    - _Requirements: 8.1, 8.2, 8.3_
+  - [ ]\* 12.3 Write property test for operational data access preservation
+    - **Property 24: Operational Data Access Preservation**
+    - **Validates: Requirements 8.1, 8.2, 8.3, 8.5**
+
+- [x] 13. Add backward compatibility and migration support
+  - [x] 13.1 Implement checkpoint disable mode
+    - Support running without checkpoint persistence
+    - Fall back to in-memory execution when disabled
+    - Maintain all existing functionality
+    - _Requirements: 11.2_
+  - [x] 13.2 Implement mixed mode support
+    - Support agents with and without checkpoint persistence
+    - Allow incremental migration
+    - Ensure orchestrator handles mixed configurations
+    - _Requirements: 11.3_
+  - [x] 13.3 Create migration utilities
+    - Add utility to convert existing workflows to checkpoint-based
+    - Add utility to test checkpoint integration without deployment
+    - Document migration process
+    - _Requirements: 11.5_
+  - [ ]\* 13.4 Write property test for tool interface compatibility
+    - **Property 32: Tool Interface Compatibility**
+    - **Validates: Requirements 11.1**
+  - [ ]\* 13.5 Write property test for API contract preservation
+    - **Property 35: API Contract Preservation**
+    - **Validates: Requirements 11.4**
+
+- [x] 14. Add comprehensive error handling
+  - [x] 14.1 Implement exponential backoff for DynamoDB operations
+    - Add retry logic with exponential backoff (100ms, 200ms, 400ms, 800ms, 1600ms)
+    - Add jitter to prevent thundering herd
+    - Maximum 5 retry attempts
+    - _Requirements: 12.5_
+  - [x] 14.2 Implement S3 streaming for large checkpoints
+    - Stream S3 payloads instead of loading into memory
+    - Handle S3 upload failures with retry
+    - Fall back to DynamoDB for checkpoints near 350KB threshold
+    - _Requirements: 12.3_
+  - [x] 14.3 Add concurrent operation support
+    - Use DynamoDB conditional writes for conflict prevention
+    - Implement version-based optimistic locking
+    - Handle concurrent access conflicts gracefully
+    - _Requirements: 12.4_
+  - [ ]\* 14.4 Write property test for exponential backoff
+    - **Property 38: Exponential Backoff**
+    - **Validates: Requirements 12.5**
+  - [ ]\* 14.5 Write property test for concurrent operations
+    - **Property 37: Concurrent Checkpoint Operations**
+    - **Validates: Requirements 12.4**
+
+- [ ] 15. Add integration tests for end-to-end workflows
+  - [ ]\* 15.1 Write integration test for three-phase workflow with checkpoints
+    - Test complete workflow from start to finish
+    - Verify checkpoints created at all phases
+    - Verify final decision includes audit trail
+    - _Requirements: 4.1, 4.2, 4.3_
+  - [ ]\* 15.2 Write integration test for failure recovery
+    - Simulate agent failure during Phase 2
+    - Verify recovery from last checkpoint
+    - Verify workflow completes successfully after recovery
+    - _Requirements: 5.1, 5.2, 5.4_
+  - [ ]\* 15.3 Write integration test for human-in-the-loop approval
+    - Pause workflow at arbitrator decision point
+    - Retrieve decision via approval API
+    - Approve decision and verify resumption
+    - _Requirements: 6.1, 6.2, 6.3_
+  - [ ]\* 15.4 Write integration test for Knowledge Base integration
+    - Query KB during arbitration
+    - Verify citations included in decision
+    - Test fallback when KB unavailable
+    - _Requirements: 7.1, 7.2, 7.3_
+
+- [x] 16. Update documentation and configuration
+  - [x] 16.1 Update README with checkpoint configuration
+    - Document environment variables for checkpoint mode
+    - Document DynamoDB table and S3 bucket setup
+    - Document IAM permissions required
+    - Add examples of checkpoint usage
+    - _Requirements: 1.1, 1.2, 1.5_
+  - [x] 16.2 Update .env.example with checkpoint variables
+    - Add CHECKPOINT_MODE (development/production)
+    - Add CHECKPOINT_TABLE_NAME
+    - Add CHECKPOINT_S3_BUCKET
+    - Add CHECKPOINT_TTL_DAYS
+    - Add KNOWLEDGE_BASE_ID
+    - _Requirements: 1.5, 7.5, 9.3_
+  - [x] 16.3 Update deployment configuration
+    - Update `.bedrock_agentcore.yaml` with checkpoint resources
+    - Add DynamoDB table creation to deployment
+    - Add S3 bucket creation to deployment
+    - Add IAM role permissions
+    - _Requirements: 1.1, 1.2_
+
+- [x] 17. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional test tasks and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties (minimum 100 iterations each)
+- Unit tests validate specific examples and edge cases
+- Integration tests validate end-to-end workflows
+- All checkpoint functionality is additive - existing operational data access remains unchanged
+- Development mode uses in-memory checkpoints for fast iteration
+- Production mode uses DynamoDB + S3 for durable persistence

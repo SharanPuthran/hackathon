@@ -2,9 +2,10 @@
 
 import asyncio
 import logging
+import os
 import sys
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from bedrock_agentcore import BedrockAgentCoreApp
 
@@ -19,6 +20,7 @@ from agents import (
 )
 from agents.arbitrator import arbitrate
 from agents.schemas import AgentResponse, Collation
+from checkpoint import CheckpointSaver, ThreadManager
 from mcp_client.client import get_streamable_http_mcp_client
 from model.load import load_model
 
@@ -33,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 # Initialize AgentCore app
 app = BedrockAgentCoreApp()
+
+# Initialize checkpoint infrastructure
+checkpoint_mode = os.getenv("CHECKPOINT_MODE", "development")
+checkpoint_saver = CheckpointSaver(mode=checkpoint_mode)
+thread_manager = ThreadManager(checkpoint_saver=checkpoint_saver)
+
+logger.info(f"✅ Checkpoint infrastructure initialized: mode={checkpoint_mode}")
+logger.info(f"   Backend: {checkpoint_saver.backend.__class__.__name__}")
 
 # Agent registry for routing
 AGENT_REGISTRY: Dict[str, Callable] = {
@@ -132,10 +142,12 @@ async def run_agent_safely(
     payload: dict,
     llm: Any,
     mcp_tools: list,
-    timeout: int = 30,
+    timeout: int = 60,
+    thread_id: str = None,
+    checkpoint_saver: CheckpointSaver = None,
 ) -> dict:
     """
-    Run agent with timeout and error handling.
+    Run agent with timeout, error handling, and optional checkpoint persistence.
 
     Args:
         agent_name: Name of the agent
@@ -143,12 +155,34 @@ async def run_agent_safely(
         payload: Request payload with natural language prompt
         llm: Model instance
         mcp_tools: MCP tools
-        timeout: Timeout in seconds (default 30)
+        timeout: Timeout in seconds (default 60)
+        thread_id: Optional thread identifier for checkpoint persistence
+        checkpoint_saver: Optional checkpoint saver for state persistence
 
     Returns:
         dict: Agent result with status
     """
     start_time = datetime.now()
+    
+    # Save checkpoint at agent start
+    if thread_id and checkpoint_saver:
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=f"{agent_name}_start",
+            state={
+                "agent": agent_name,
+                "payload": payload,
+                "status": "started"
+            },
+            metadata={
+                "agent": agent_name,
+                "phase": payload.get("phase", "unknown"),
+                "timestamp": datetime.now().isoformat(),
+                "status": "started"
+            }
+        )
+        logger.debug(f"   💾 Checkpoint saved: {agent_name}_start")
+    
     try:
         logger.info(f"🚀 Starting {agent_name} agent...")
         logger.debug(f"   Payload keys: {list(payload.keys())}")
@@ -163,6 +197,25 @@ async def run_agent_safely(
         if "status" not in result:
             result["status"] = "success"
         result["duration_seconds"] = duration
+        # Always ensure agent name is in result
+        result["agent"] = agent_name
+
+        # Save checkpoint at agent completion
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id=f"{agent_name}_complete",
+                state=result,
+                metadata={
+                    "agent": agent_name,
+                    "phase": payload.get("phase", "unknown"),
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "completed",
+                    "confidence": result.get("confidence", 0.0),
+                    "duration_seconds": duration
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: {agent_name}_complete")
 
         logger.info(f"✅ {agent_name} completed successfully in {duration:.2f}s")
         logger.debug(f"   Result keys: {list(result.keys())}")
@@ -173,43 +226,106 @@ async def run_agent_safely(
         logger.error(
             f"⏱ {agent_name} timeout after {timeout}s (actual: {duration:.2f}s)"
         )
-        return {
+        
+        error_result = {
             "agent": agent_name,
             "status": "timeout",
             "error": f"Agent execution exceeded {timeout} second timeout",
             "duration_seconds": duration,
         }
+        
+        # Save checkpoint on timeout
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id=f"{agent_name}_timeout",
+                state=error_result,
+                metadata={
+                    "agent": agent_name,
+                    "phase": payload.get("phase", "unknown"),
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "timeout",
+                    "duration_seconds": duration
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: {agent_name}_timeout")
+        
+        return error_result
+        
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
         logger.error(f"❌ {agent_name} error after {duration:.2f}s: {e}")
         logger.exception(f"Full traceback for {agent_name}:")
-        return {
+        
+        error_result = {
             "agent": agent_name,
             "status": "error",
             "error": str(e),
             "error_type": type(e).__name__,
             "duration_seconds": duration,
         }
+        
+        # Save checkpoint on error
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id=f"{agent_name}_error",
+                state=error_result,
+                metadata={
+                    "agent": agent_name,
+                    "phase": payload.get("phase", "unknown"),
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "error",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "duration_seconds": duration
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: {agent_name}_error")
+        
+        return error_result
 
 
 async def phase1_initial_recommendations(
-    user_prompt: str, llm: Any, mcp_tools: list
+    user_prompt: str,
+    llm: Any,
+    mcp_tools: list,
+    thread_id: str = None,
+    checkpoint_saver: CheckpointSaver = None
 ) -> Collation:
     """
-    Phase 1: Initial Recommendations
+    Phase 1: Initial Recommendations with checkpoint persistence.
     
     Invoke all 7 agents in parallel with the user prompt plus instructions.
     Agents are responsible for extracting flight info and performing lookups.
+    
+    Saves checkpoints before and after phase execution for failure recovery.
     
     Args:
         user_prompt: Natural language prompt from user
         llm: Model instance
         mcp_tools: MCP tools
+        thread_id: Optional thread identifier for checkpoint persistence
+        checkpoint_saver: Optional checkpoint saver for state persistence
         
     Returns:
         Collation: Collated initial recommendations with metadata
     """
     logger.info("🔒 Phase 1: Initial Recommendations (parallel execution)")
+    
+    # Save checkpoint before phase execution
+    if thread_id and checkpoint_saver:
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="phase1_start",
+            state={"user_prompt": user_prompt},
+            metadata={
+                "phase": "phase1",
+                "status": "started",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.debug(f"   ✅ Phase 1 start checkpoint saved")
     
     # Augment prompt with phase 1 instructions
     augmented_prompt = augment_prompt_phase1(user_prompt)
@@ -225,10 +341,10 @@ async def phase1_initial_recommendations(
     all_agents = SAFETY_AGENTS + BUSINESS_AGENTS
     logger.debug(f"   Agents: {[name for name, _ in all_agents]}")
     
-    # Run all agents in parallel
+    # Run all agents in parallel with checkpoint support
     phase_start = datetime.now()
     agent_tasks = [
-        run_agent_safely(name, fn, payload, llm, mcp_tools)
+        run_agent_safely(name, fn, payload, llm, mcp_tools, timeout=60, thread_id=thread_id, checkpoint_saver=checkpoint_saver)
         for name, fn in all_agents
     ]
     agent_results = await asyncio.gather(*agent_tasks)
@@ -281,6 +397,21 @@ async def phase1_initial_recommendations(
         duration_seconds=phase_duration
     )
     
+    # Save checkpoint after phase completion
+    if thread_id and checkpoint_saver:
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="phase1_complete",
+            state=collation.model_dump(),
+            metadata={
+                "phase": "phase1",
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
+                "duration_seconds": phase_duration
+            }
+        )
+        logger.debug(f"   ✅ Phase 1 completion checkpoint saved")
+    
     # Log collation summary
     counts = collation.get_agent_count()
     logger.info(f"   Collation: {counts['success']} success, {counts['timeout']} timeout, {counts['error']} error")
@@ -289,24 +420,50 @@ async def phase1_initial_recommendations(
 
 
 async def phase2_revision_round(
-    user_prompt: str, initial_collation: Collation, llm: Any, mcp_tools: list
+    user_prompt: str,
+    initial_collation: Collation,
+    llm: Any,
+    mcp_tools: list,
+    thread_id: str = None,
+    checkpoint_saver: CheckpointSaver = None
 ) -> Collation:
     """
-    Phase 2: Revision Round
+    Phase 2: Revision Round with checkpoint persistence.
     
     Invoke all 7 agents with user prompt, initial recommendations, and revision instructions.
     Agents review others' recommendations and revise their own.
+    
+    Loads Phase 1 checkpoint and saves Phase 2 checkpoints for failure recovery.
     
     Args:
         user_prompt: Original natural language prompt from user
         initial_collation: Collated initial recommendations from phase 1
         llm: Model instance
         mcp_tools: MCP tools
+        thread_id: Optional thread identifier for checkpoint persistence
+        checkpoint_saver: Optional checkpoint saver for state persistence
         
     Returns:
         Collation: Collated revised recommendations with metadata
     """
     logger.info("🔄 Phase 2: Revision Round (parallel execution)")
+    
+    # Save checkpoint before phase execution
+    if thread_id and checkpoint_saver:
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="phase2_start",
+            state={
+                "user_prompt": user_prompt,
+                "phase1_results": initial_collation.model_dump()
+            },
+            metadata={
+                "phase": "phase2",
+                "status": "started",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.debug(f"   ✅ Phase 2 start checkpoint saved")
     
     # Convert Collation to dict for augment_prompt_phase2
     initial_collation_dict = {
@@ -335,10 +492,10 @@ async def phase2_revision_round(
     all_agents = SAFETY_AGENTS + BUSINESS_AGENTS
     logger.debug(f"   Agents: {[name for name, _ in all_agents]}")
     
-    # Run all agents in parallel
+    # Run all agents in parallel with checkpoint support
     phase_start = datetime.now()
     agent_tasks = [
-        run_agent_safely(name, fn, payload, llm, mcp_tools)
+        run_agent_safely(name, fn, payload, llm, mcp_tools, timeout=60, thread_id=thread_id, checkpoint_saver=checkpoint_saver)
         for name, fn in all_agents
     ]
     agent_results = await asyncio.gather(*agent_tasks)
@@ -391,6 +548,21 @@ async def phase2_revision_round(
         duration_seconds=phase_duration
     )
     
+    # Save checkpoint after phase completion
+    if thread_id and checkpoint_saver:
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="phase2_complete",
+            state=collation.model_dump(),
+            metadata={
+                "phase": "phase2",
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
+                "duration_seconds": phase_duration
+            }
+        )
+        logger.debug(f"   ✅ Phase 2 completion checkpoint saved")
+    
     # Log collation summary
     counts = collation.get_agent_count()
     logger.info(f"   Collation: {counts['success']} success, {counts['timeout']} timeout, {counts['error']} error")
@@ -398,16 +570,29 @@ async def phase2_revision_round(
     return collation
 
 
-async def phase3_arbitration(revised_collation: Collation, llm: Any) -> dict:
+async def phase3_arbitration(
+    revised_collation: Collation,
+    llm: Any,
+    thread_id: str = None,
+    checkpoint_saver: CheckpointSaver = None,
+    initial_collation: Optional[Collation] = None
+) -> dict:
     """
-    Phase 3: Arbitration
+    Phase 3: Arbitration with checkpoint persistence.
     
     Invoke arbitrator with all revised recommendations.
     Arbitrator resolves conflicts and makes final decision.
     
+    Loads Phase 1 and Phase 2 checkpoints and saves final decision checkpoint.
+    
     Args:
         revised_collation: Collated revised recommendations from phase 2 (Collation model)
         llm: Model instance (Opus 4.5 for arbitrator)
+        thread_id: Optional thread identifier for checkpoint persistence
+        checkpoint_saver: Optional checkpoint saver for state persistence
+        initial_collation: Optional collated initial recommendations from phase 1 (Collation model).
+            When provided, enables phase evolution analysis showing how recommendations
+            changed between Phase 1 and Phase 2.
         
     Returns:
         dict: Final arbitrated decision
@@ -422,24 +607,64 @@ async def phase3_arbitration(revised_collation: Collation, llm: Any) -> dict:
             "reasoning": str,
             "confidence": float,
             "timestamp": str,
-            "duration_seconds": float
+            "duration_seconds": float,
+            "phases_considered": list[str],
+            "recommendation_evolution": dict  # Only if initial_collation provided
         }
     """
     logger.info("⚖️  Phase 3: Arbitration")
     
+    # Save checkpoint before phase execution
+    if thread_id and checkpoint_saver:
+        checkpoint_state = {"phase2_results": revised_collation.model_dump()}
+        if initial_collation is not None:
+            checkpoint_state["phase1_results"] = initial_collation.model_dump()
+        
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="phase3_start",
+            state=checkpoint_state,
+            metadata={
+                "phase": "phase3",
+                "status": "started",
+                "timestamp": datetime.now().isoformat(),
+                "phases_available": ["phase1", "phase2"] if initial_collation else ["phase2"]
+            }
+        )
+        logger.debug(f"   ✅ Phase 3 start checkpoint saved")
+    
     phase_start = datetime.now()
     
     try:
-        # Call arbitrator with revised collation
+        # Call arbitrator with revised collation and optional initial collation
         # Note: arbitrator will load Opus 4.5 model internally if llm is None
-        logger.info("   Invoking arbitrator with revised recommendations")
-        result = await arbitrate(revised_collation, llm_opus=None)
+        if initial_collation is not None:
+            logger.info("   Invoking arbitrator with both Phase 1 and Phase 2 recommendations")
+        else:
+            logger.info("   Invoking arbitrator with Phase 2 recommendations only (legacy mode)")
+        result = await arbitrate(revised_collation, llm_opus=None, initial_recommendations=initial_collation)
         
         # Add phase metadata
         result["phase"] = "arbitration"
         
         phase_duration = (datetime.now() - phase_start).total_seconds()
         result["duration_seconds"] = phase_duration
+        
+        # Save final checkpoint
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id="phase3_complete",
+                state=result,
+                metadata={
+                    "phase": "phase3",
+                    "status": "completed",
+                    "timestamp": datetime.now().isoformat(),
+                    "duration_seconds": phase_duration,
+                    "confidence": result.get("confidence", 0.0)
+                }
+            )
+            logger.debug(f"   ✅ Phase 3 completion checkpoint saved")
         
         logger.info(f"   Phase 3 completed in {phase_duration:.2f}s")
         logger.info(f"   Conflicts identified: {len(result.get('conflicts_identified', []))}")
@@ -483,7 +708,7 @@ async def phase3_arbitration(revised_collation: Collation, llm: Any) -> dict:
 
 async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict:
     """
-    Orchestrator: Three-phase multi-round orchestration.
+    Orchestrator: Three-phase multi-round orchestration with checkpoint persistence.
     
     Phase 1: Initial recommendations from all agents
     Phase 2: Revision round with cross-agent insights
@@ -491,6 +716,11 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
     
     Accepts natural language prompts. Agents will use their database tools
     to extract required information and perform analysis.
+    
+    Checkpoint persistence enables:
+    - Failure recovery from last successful checkpoint
+    - Complete audit trail for regulatory compliance
+    - Time-travel debugging for issue investigation
 
     Args:
         user_prompt: Natural language description of the disruption
@@ -498,7 +728,7 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
         mcp_tools: MCP tools
 
     Returns:
-        dict: Final decision with complete audit trail
+        dict: Final decision with complete audit trail and thread_id
     """
     logger.info("=" * 60)
     logger.info("🎯 Starting SkyMarshal Orchestrator (Three-Phase)")
@@ -522,44 +752,94 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
     
     orchestration_start = datetime.now()
     
-    # Phase 1: Initial Recommendations
-    initial_collation = await phase1_initial_recommendations(user_prompt, llm, mcp_tools)
-    
-    # Phase 2: Revision Round
-    revised_collation = await phase2_revision_round(
-        user_prompt, initial_collation, llm, mcp_tools
+    # Create thread for this workflow
+    thread_id = thread_manager.create_thread(
+        user_prompt=user_prompt,
+        metadata={"orchestration_start": orchestration_start.isoformat()}
     )
+    logger.info(f"🧵 Thread created: {thread_id}")
     
-    # Phase 3: Arbitration
-    final_decision = await phase3_arbitration(revised_collation, llm)
-    
-    # Calculate total duration
-    total_duration = (datetime.now() - orchestration_start).total_seconds()
-    
-    # Build complete response with audit trail
-    response = {
-        "status": "success",
-        "final_decision": final_decision,
-        "audit_trail": {
-            "user_prompt": user_prompt,
-            "phase1_initial": initial_collation.model_dump(),
-            "phase2_revision": revised_collation.model_dump(),
-            "phase3_arbitration": final_decision
-        },
-        "timestamp": datetime.now().isoformat(),
-        "phase1_duration_seconds": initial_collation.duration_seconds,
-        "phase2_duration_seconds": revised_collation.duration_seconds,
-        "phase3_duration_seconds": final_decision.get("duration_seconds", 0),
-        "total_duration_seconds": total_duration
-    }
+    try:
+        # Save initial checkpoint
+        await checkpoint_saver.save_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id="start",
+            state={"user_prompt": user_prompt},
+            metadata={
+                "phase": "start",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.debug(f"   ✅ Initial checkpoint saved")
+        
+        # Phase 1: Initial Recommendations
+        initial_collation = await phase1_initial_recommendations(
+            user_prompt, llm, mcp_tools, thread_id, checkpoint_saver
+        )
+        
+        # Phase 2: Revision Round
+        revised_collation = await phase2_revision_round(
+            user_prompt, initial_collation, llm, mcp_tools, thread_id, checkpoint_saver
+        )
+        
+        # Phase 3: Arbitration
+        final_decision = await phase3_arbitration(
+            revised_collation, llm, thread_id, checkpoint_saver, initial_collation
+        )
+        
+        # Calculate total duration
+        total_duration = (datetime.now() - orchestration_start).total_seconds()
+        
+        # Mark thread as complete
+        thread_manager.mark_thread_complete(
+            thread_id=thread_id,
+            result=final_decision
+        )
+        logger.info(f"   ✅ Thread marked complete: {thread_id}")
+        
+        # Build complete response with audit trail
+        response = {
+            "status": "success",
+            "thread_id": thread_id,
+            "final_decision": final_decision,
+            "knowledgeBaseConsidered": final_decision.get("knowledgeBaseConsidered", False),
+            "audit_trail": {
+                "user_prompt": user_prompt,
+                "phase1_initial": initial_collation.model_dump(),
+                "phase2_revision": revised_collation.model_dump(),
+                "phase3_arbitration": final_decision
+            },
+            "timestamp": datetime.now().isoformat(),
+            "phase1_duration_seconds": initial_collation.duration_seconds,
+            "phase2_duration_seconds": revised_collation.duration_seconds,
+            "phase3_duration_seconds": final_decision.get("duration_seconds", 0),
+            "total_duration_seconds": total_duration
+        }
 
-    logger.info("=" * 60)
-    logger.info(
-        f"✅ Orchestrator Complete (Total: {total_duration:.2f}s)"
-    )
-    logger.info("=" * 60)
+        # Log knowledge base consideration status
+        kb_considered = final_decision.get("knowledgeBaseConsidered", False)
+        kb_docs = final_decision.get("knowledge_base", {}).get("documents_found", 0)
+        logger.info(f"📚 Knowledge Base: considered={kb_considered}, documents_found={kb_docs}")
 
-    return response
+        logger.info("=" * 60)
+        logger.info(
+            f"✅ Orchestrator Complete (Total: {total_duration:.2f}s)"
+        )
+        logger.info("=" * 60)
+
+        return response
+        
+    except Exception as e:
+        # Mark thread as failed
+        thread_manager.mark_thread_failed(
+            thread_id=thread_id,
+            error=str(e),
+            error_details={"error_type": type(e).__name__}
+        )
+        logger.error(f"   ❌ Thread marked failed: {thread_id} - {e}")
+        
+        # Re-raise exception for upstream handling
+        raise
 
 
 @app.entrypoint

@@ -602,6 +602,156 @@ agents:
 
 **Note:** Do not manually edit this file. Use `agentcore configure` to make changes.
 
+### Checkpoint Persistence Configuration
+
+SkyMarshal includes **checkpoint persistence** for durable state management, failure recovery, and complete audit trails. The system supports two modes:
+
+#### Development Mode (Default)
+
+In-memory checkpoints for fast iteration without AWS resources:
+
+```bash
+# .env
+CHECKPOINT_MODE=development
+```
+
+**Features:**
+
+- ✅ No AWS resources required
+- ✅ Fast iteration and testing
+- ✅ Automatic cleanup on restart
+- ❌ No persistence across restarts
+- ❌ No failure recovery
+
+#### Production Mode
+
+Durable checkpoints with DynamoDB + S3:
+
+```bash
+# .env
+CHECKPOINT_MODE=production
+CHECKPOINT_TABLE_NAME=SkyMarshalCheckpoints
+CHECKPOINT_S3_BUCKET=skymarshal-checkpoints-<account-id>
+CHECKPOINT_TTL_DAYS=90
+```
+
+**Features:**
+
+- ✅ Durable persistence across restarts
+- ✅ Failure recovery from last checkpoint
+- ✅ Complete audit trail (90 days)
+- ✅ Time-travel debugging
+- ✅ Human-in-the-loop ready
+- ✅ Automatic size-based routing (DynamoDB <350KB, S3 ≥350KB)
+
+#### Infrastructure Setup
+
+**Create DynamoDB Table:**
+
+```bash
+cd skymarshal_agents_new/skymarshal
+uv run python scripts/create_checkpoint_table.py
+```
+
+**Create S3 Bucket:**
+
+```bash
+uv run python scripts/create_checkpoint_s3_bucket.py
+```
+
+**IAM Permissions Required:**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/SkyMarshalCheckpoints"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::skymarshal-checkpoints-*/*"
+    }
+  ]
+}
+```
+
+#### Checkpoint Usage
+
+Checkpoints are automatically saved at key points:
+
+- **Workflow Start**: Initial user prompt
+- **Phase 1 Start/Complete**: Safety agent execution
+- **Phase 2 Start/Complete**: Business agent execution
+- **Phase 3 Start/Complete**: Arbitration decision
+- **Agent Start/Complete/Error**: Individual agent checkpoints
+
+**Access Thread History:**
+
+```python
+from checkpoint import CheckpointSaver
+
+# Initialize checkpoint saver
+checkpoint_saver = CheckpointSaver(mode="production")
+
+# Get complete audit trail
+history = await checkpoint_saver.get_thread_history(
+    thread_id="<thread-id>",
+    phase_filter="phase1",  # Optional: filter by phase
+    agent_filter="crew_compliance"  # Optional: filter by agent
+)
+
+# List all checkpoints
+checkpoints = await checkpoint_saver.list_checkpoints(
+    thread_id="<thread-id>",
+    status_filter="completed"  # Optional: filter by status
+)
+```
+
+**Failure Recovery:**
+
+```python
+from checkpoint.recovery import recover_from_failure
+
+# Recover from last successful checkpoint
+result = await recover_from_failure(
+    thread_id="<thread-id>",
+    checkpoint_saver=checkpoint_saver
+)
+```
+
+#### Migration Guide
+
+For detailed migration instructions, see:
+
+```python
+from checkpoint.migration import migration_guide
+print(migration_guide())
+```
+
+Or run migration tests:
+
+```bash
+cd skymarshal_agents_new/skymarshal
+uv run python src/checkpoint/migration.py
+```
+
+**Key Points:**
+
+- ✅ **Fully Backward Compatible**: All checkpoint parameters are optional
+- ✅ **Zero Downtime**: Existing workflows continue to work
+- ✅ **Gradual Migration**: Enable checkpoints incrementally
+- ✅ **Easy Rollback**: Switch back to development mode anytime
+- ✅ **Additive Only**: No breaking changes to existing functionality
+
 ## Common Tasks
 
 ### Adding a New Agent

@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/checkpoint/saver.py
+# hypothesis_version: 6.151.4
+
+[0.1, 100, 350, 1000, 1024, 1600, '90', ':pk', ':sk_prefix', 'AWS_REGION', 'Body', 'CHECKPOINT#', 'CHECKPOINT_MODE', 'CHECKPOINT_S3_BUCKET', 'CHECKPOINT_TTL_DAYS', 'DynamoDB', 'InMemorySaver', 'Items', 'PK', 'S3 not configured', 'SK', 'agent', 'application/json', 'checkpoint_id', 'development', 'dynamodb', 'has_s3_reference', 'metadata', 'phase', 'production', 's3', 's3_reference', 'size_bytes', 'state', 'status', 'thread_id', 'timestamp', 'ttl', 'us-east-1', 'version']

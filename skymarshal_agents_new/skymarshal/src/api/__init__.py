@@ -1,9 +1,8 @@
 """
-API Module
+API module for exposing AgentCore Runtime through REST endpoints.
 
-This module provides REST API endpoints for the SkyMarshal system.
+This module provides HTTP API endpoints for invoking the SkyMarshal
+AgentCore Runtime agent via AWS API Gateway and Lambda.
 """
 
-from api.endpoints import router
-
-__all__ = ['router']
+__version__ = "0.1.0"

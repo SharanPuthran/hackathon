@@ -2164,6 +2164,16 @@ class ArbitratorOutput(BaseModel):
         description="ID of the recommended solution (1, 2, or 3)"
     )
     
+    # NEW: Phase evolution analysis (arbitrator-dual-phase-input)
+    recommendation_evolution: Optional["RecommendationEvolution"] = Field(
+        default=None,
+        description="Analysis of how recommendations evolved between Phase 1 and Phase 2"
+    )
+    phases_considered: List[str] = Field(
+        default_factory=lambda: ["phase2"],
+        description="Which phases were available for decision making (e.g., ['phase1', 'phase2'])"
+    )
+    
     @field_validator("final_decision", "justification", "reasoning")
     @classmethod
     def validate_not_empty(cls, v: str) -> str:
@@ -2265,8 +2275,9 @@ class ArbitratorOutput(BaseModel):
         if v is None:
             return v
         
+        # Treat empty list as None for backward compatibility
         if not v:
-            raise ValueError("If solution_options is provided, it must contain at least one solution")
+            return None
         
         if len(v) > 3:
             raise ValueError(f"Maximum 3 solution options allowed, got {len(v)}")
@@ -2297,9 +2308,12 @@ class ArbitratorOutput(BaseModel):
             return v
         
         solution_options = info.data.get("solution_options")
-        if solution_options is None:
+        
+        # If solution_options is None or empty, recommended_solution_id must also be None
+        if solution_options is None or len(solution_options) == 0:
             raise ValueError(
-                "recommended_solution_id cannot be set without solution_options"
+                "recommended_solution_id cannot be set when solution_options is None or empty. "
+                "Both must be None in error scenarios, or both must be populated in success scenarios."
             )
         
         valid_ids = [s.solution_id for s in solution_options]
@@ -2520,3 +2534,206 @@ class DecisionReport(BaseModel):
                 f"Invalid timestamp format: {v}. "
                 "Expected ISO 8601 format"
             )
+
+
+# ============================================================================
+# Phase Evolution Schemas (Dual-Phase Input Enhancement)
+# ============================================================================
+#
+# These schemas support the dual-phase input enhancement for the arbitrator,
+# enabling analysis of how agent recommendations evolved between Phase 1
+# (initial) and Phase 2 (revised).
+#
+# Key Concepts:
+# - Convergence: Agents moving toward agreement (positive signal)
+# - Divergence: Agents moving apart (warning signal)
+# - Stability: Unchanged recommendations (high confidence signal)
+# - New Constraints: Binding constraints added in Phase 2 (critical signal)
+#
+# ============================================================================
+
+
+class AgentEvolution(BaseModel):
+    """
+    Evolution of a single agent's recommendation between Phase 1 and Phase 2.
+    
+    This model tracks how an agent's recommendation changed during the
+    multi-round orchestration process, providing insights into:
+    - Whether the agent changed their recommendation
+    - The direction of change (convergence, divergence, or stability)
+    - Changes to binding constraints
+    
+    Attributes:
+        agent_name: Name of the agent
+        phase1_recommendation: Phase 1 recommendation text (None if not in Phase 1)
+        phase2_recommendation: Phase 2 recommendation text
+        phase1_confidence: Phase 1 confidence score (None if not in Phase 1)
+        phase2_confidence: Phase 2 confidence score
+        change_type: Classification of how the recommendation changed
+        binding_constraints_added: Binding constraints added in Phase 2
+        binding_constraints_removed: Binding constraints removed in Phase 2
+        change_summary: Human-readable summary of the change
+    
+    Change Types:
+        - unchanged: Recommendation stayed the same
+        - converged: Agent moved toward agreement with others
+        - diverged: Agent moved further from others
+        - new_in_phase2: Agent only present in Phase 2
+        - dropped_in_phase2: Agent only present in Phase 1
+    
+    Example:
+        >>> evolution = AgentEvolution(
+        ...     agent_name="network",
+        ...     phase1_recommendation="Delay 2 hours to minimize propagation",
+        ...     phase2_recommendation="Delay 10 hours to satisfy crew rest",
+        ...     phase1_confidence=0.85,
+        ...     phase2_confidence=0.90,
+        ...     change_type="converged",
+        ...     binding_constraints_added=[],
+        ...     binding_constraints_removed=[],
+        ...     change_summary="Network agent revised delay from 2h to 10h after seeing crew constraints"
+        ... )
+    """
+    
+    agent_name: str = Field(description="Name of the agent")
+    phase1_recommendation: Optional[str] = Field(
+        default=None,
+        description="Phase 1 recommendation text (None if agent not in Phase 1)"
+    )
+    phase2_recommendation: str = Field(
+        description="Phase 2 recommendation text"
+    )
+    phase1_confidence: Optional[float] = Field(
+        default=None,
+        description="Phase 1 confidence score",
+        ge=0.0,
+        le=1.0
+    )
+    phase2_confidence: float = Field(
+        description="Phase 2 confidence score",
+        ge=0.0,
+        le=1.0
+    )
+    change_type: Literal["unchanged", "converged", "diverged", "new_in_phase2", "dropped_in_phase2"] = Field(
+        description="Classification of how the recommendation changed"
+    )
+    binding_constraints_added: List[str] = Field(
+        default_factory=list,
+        description="Binding constraints added in Phase 2"
+    )
+    binding_constraints_removed: List[str] = Field(
+        default_factory=list,
+        description="Binding constraints removed in Phase 2"
+    )
+    change_summary: str = Field(
+        description="Human-readable summary of the change"
+    )
+    
+    @field_validator("agent_name")
+    @classmethod
+    def validate_agent_name(cls, v: str) -> str:
+        """Validate agent name is one of the known agents."""
+        valid_agents = {
+            "crew_compliance", "maintenance", "regulatory",
+            "network", "guest_experience", "cargo", "finance",
+            "arbitrator"
+        }
+        v = v.lower().strip()
+        if v not in valid_agents:
+            raise ValueError(
+                f"Invalid agent name: {v}. "
+                f"Must be one of: {', '.join(sorted(valid_agents))}"
+            )
+        return v
+    
+    @field_validator("change_summary")
+    @classmethod
+    def validate_change_summary(cls, v: str) -> str:
+        """Validate change summary is not empty."""
+        v = v.strip()
+        if not v:
+            raise ValueError("Change summary cannot be empty")
+        return v
+
+
+class RecommendationEvolution(BaseModel):
+    """
+    Complete evolution analysis across all agents between Phase 1 and Phase 2.
+    
+    This model aggregates the evolution of all agent recommendations,
+    providing a high-level view of how the multi-round process influenced
+    the final recommendations.
+    
+    Attributes:
+        phases_available: Which phases were provided (e.g., ["phase1", "phase2"])
+        agents_changed: Count of agents that changed recommendations
+        agents_unchanged: Count of agents with stable recommendations
+        convergence_detected: Whether agents showed convergence pattern
+        divergence_detected: Whether agents showed divergence pattern
+        evolution_details: Detailed evolution for each agent
+        analysis_summary: Overall summary of recommendation evolution
+    
+    Interpretation:
+        - High convergence + low divergence: Consensus building (positive)
+        - High divergence: Unresolved conflicts (requires attention)
+        - High stability: Strong initial recommendations (high confidence)
+        - Many new constraints: New information discovered (critical)
+    
+    Example:
+        >>> evolution = RecommendationEvolution(
+        ...     phases_available=["phase1", "phase2"],
+        ...     agents_changed=3,
+        ...     agents_unchanged=4,
+        ...     convergence_detected=True,
+        ...     divergence_detected=False,
+        ...     evolution_details=[...],
+        ...     analysis_summary="3 agents revised recommendations toward consensus"
+        ... )
+    """
+    
+    phases_available: List[str] = Field(
+        description="Which phases were provided (e.g., ['phase1', 'phase2'])"
+    )
+    agents_changed: int = Field(
+        description="Count of agents that changed recommendations",
+        ge=0
+    )
+    agents_unchanged: int = Field(
+        description="Count of agents with stable recommendations",
+        ge=0
+    )
+    convergence_detected: bool = Field(
+        description="Whether agents showed convergence pattern"
+    )
+    divergence_detected: bool = Field(
+        description="Whether agents showed divergence pattern"
+    )
+    evolution_details: List[AgentEvolution] = Field(
+        default_factory=list,
+        description="Detailed evolution for each agent"
+    )
+    analysis_summary: str = Field(
+        description="Overall summary of recommendation evolution"
+    )
+    
+    @field_validator("phases_available")
+    @classmethod
+    def validate_phases_available(cls, v: List[str]) -> List[str]:
+        """Validate phases are valid."""
+        valid_phases = {"phase1", "phase2"}
+        for phase in v:
+            if phase not in valid_phases:
+                raise ValueError(
+                    f"Invalid phase: {phase}. Must be one of: {', '.join(valid_phases)}"
+                )
+        return v
+    
+    @field_validator("analysis_summary")
+    @classmethod
+    def validate_analysis_summary(cls, v: str) -> str:
+        """Validate analysis summary is not empty."""
+        v = v.strip()
+        if not v:
+            raise ValueError("Analysis summary cannot be empty")
+        return v
+

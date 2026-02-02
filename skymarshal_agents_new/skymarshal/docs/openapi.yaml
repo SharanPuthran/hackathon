@@ -1,0 +1,194 @@
+openapi: 3.0.0
+info:
+  title: SkyMarshal AgentCore REST API
+  description: REST API for invoking the SkyMarshal AgentCore Runtime agent
+  version: 0.1.0
+  contact:
+    name: SkyMarshal Team
+
+servers:
+  - url: https://api.example.com/api/v1
+    description: Production server
+  - url: https://dev-api.example.com/api/v1
+    description: Development server
+
+security:
+  - AWSSignatureV4: []
+
+paths:
+  /invoke:
+    post:
+      summary: Invoke AgentCore Runtime agent
+      description: Send a disruption prompt to the SkyMarshal agent for analysis
+      operationId: invokeAgent
+      tags:
+        - Agent Invocation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeRequest"
+            examples:
+              simple:
+                summary: Simple disruption
+                value:
+                  prompt: "Flight AA123 delayed 3 hours due to weather"
+              with_session:
+                summary: With session ID
+                value:
+                  prompt: "What are the passenger impacts?"
+                  session_id: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Successful invocation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "504":
+          description: Gateway timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /health:
+    get:
+      summary: Health check
+      description: Check API and dependency health status
+      operationId: healthCheck
+      tags:
+        - Health
+      security: []
+      responses:
+        "200":
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: System is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  securitySchemes:
+    AWSSignatureV4:
+      type: apiKey
+      name: Authorization
+      in: header
+      description: AWS Signature Version 4 authentication
+
+  schemas:
+    InvokeRequest:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          type: string
+          minLength: 10
+          maxLength: 10000
+          description: Disruption description in natural language
+          example: "Flight AA123 delayed 3 hours due to weather"
+        session_id:
+          type: string
+          format: uuid
+          description: Optional session ID for multi-turn conversations
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        streaming:
+          type: boolean
+          default: false
+          description: Enable streaming responses
+
+    InvokeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+        request_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        execution_time_ms:
+          type: integer
+          description: Execution duration in milliseconds
+        timestamp:
+          type: string
+          format: date-time
+        assessment:
+          type: object
+          description: Complete disruption assessment
+        safety_phase:
+          type: object
+          description: Safety agents results
+        business_phase:
+          type: object
+          description: Business agents results
+        final_decision:
+          type: string
+          enum: [approved, rejected, conditional]
+        recommendations:
+          type: array
+          items:
+            type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        request_id:
+          type: string
+          format: uuid
+        error_code:
+          type: string
+          example: "TIMEOUT"
+        error_message:
+          type: string
+          example: "Agent execution exceeded timeout"
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+          example: "0.1.0"
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            dynamodb: "healthy"
+            agentcore: "healthy"

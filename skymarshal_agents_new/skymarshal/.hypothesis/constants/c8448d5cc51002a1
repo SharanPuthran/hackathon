@@ -1,0 +1,4 @@
+# file: /Users/sharanputhran/Learning/Hackathon/skymarshal_agents_new/skymarshal/src/checkpoint/recovery.py
+# hypothesis_version: 6.151.4
+
+['_complete', 'checkpoint_id', 'completed', 'error', 'metadata', 'phase', 'phase1', 'phase2', 'phase3', 'reason', 'recovered', 'recovery_failed', 'state', 'status', 'thread_id', 'timestamp', 'unknown']

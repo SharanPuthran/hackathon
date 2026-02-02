@@ -341,5 +341,5 @@ DEFAULT_QUERY_LIMIT: Final[int] = 100
 MAX_BATCH_SIZE: Final[int] = 25  # DynamoDB batch write limit
 
 # Timeout settings
-QUERY_TIMEOUT_SECONDS: Final[int] = 30
+QUERY_TIMEOUT_SECONDS: Final[int] = 60
 GSI_ACTIVATION_TIMEOUT_SECONDS: Final[int] = 600  # 10 minutes
