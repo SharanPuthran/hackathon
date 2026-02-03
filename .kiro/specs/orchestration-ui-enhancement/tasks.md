@@ -1,0 +1,249 @@
+# Implementation Plan: Orchestration UI Enhancement
+
+## Overview
+
+This implementation plan breaks down the frontend UI enhancement into discrete coding tasks. The approach follows a bottom-up strategy: first enhance the ResponseMapper to handle the three-phase API structure, then update components to use the new data, and finally add property-based tests to validate correctness.
+
+## Tasks
+
+- [x] 1. Enhance ResponseMapper for three-phase parsing
+  - [x] 1.1 Update TypeScript interfaces for API response structure
+    - Add AuditTrail, Phase1Initial, Phase2Revision, Phase3Arbitration interfaces
+    - Update AgentResponse interface with new fields (recommendation, reasoning, data_sources, status)
+    - Update SolutionOption interface with all scoring and impact fields
+    - _Requirements: 1.1, 1.2, 1.3, 1.6_
+  - [x] 1.2 Implement parsePhase1 method
+    - Extract responses from phase1_initial.responses object
+    - Map each agent response to MessageData with correct fields
+    - Handle missing or null fields with defaults
+    - _Requirements: 1.1, 1.5_
+  - [x] 1.3 Implement parsePhase2 method
+    - Extract responses from phase2_revision.responses object
+    - Map each agent response to MessageData with isCrossImpactRound: true
+    - Handle missing or null fields with defaults
+    - _Requirements: 1.2, 4.5_
+  - [x] 1.4 Implement parseSolutions method
+    - Extract solution_options from phase3_arbitration
+    - Map each solution to Solution interface with all fields
+    - Derive risk level from scoring properties
+    - Mark recommended solution based on recommended_solution_id
+    - _Requirements: 1.3, 1.6, 5.3, 5.5_
+  - [x] 1.5 Implement parseAuditTrail main method
+    - Call parsePhase1, parsePhase2, and parseSolutions
+    - Return combined result object
+    - Handle missing phases gracefully
+    - _Requirements: 1.1, 1.2, 1.3, 1.7_
+  - [ ]\* 1.6 Write property test for complete audit trail parsing
+    - **Property 1: Complete Audit Trail Parsing**
+    - **Validates: Requirements 1.1, 1.2, 1.3**
+  - [ ]\* 1.7 Write property test for agent name mapping
+    - **Property 2: Agent Name Mapping Consistency**
+    - **Validates: Requirements 1.4**
+  - [ ]\* 1.8 Write property test for agent response field extraction
+    - **Property 3: Agent Response Field Extraction**
+    - **Validates: Requirements 1.5**
+  - [ ]\* 1.9 Write property test for solution option field extraction
+    - **Property 4: Solution Option Field Extraction**
+    - **Validates: Requirements 1.6**
+  - [ ]\* 1.10 Write property test for graceful handling of missing fields
+    - **Property 5: Graceful Handling of Missing Fields**
+    - **Validates: Requirements 1.7, 7.5**
+
+- [x] 2. Update OrchestrationView for phase-based display
+  - [x] 2.1 Update useEffect to parse audit_trail structure
+    - Replace current parsing logic with parseAuditTrail call
+    - Extract phase1Messages, phase2Messages, and solutions from result
+    - Handle missing assessment data with warning message
+    - _Requirements: 2.1, 7.2_
+  - [x] 2.2 Implement displayPhase1Messages function
+    - Iterate through phase1Messages array
+    - Show thinking indicator for 800ms before each message
+    - Add message to state and mark agent as speaking
+    - Wait 1000ms between messages
+    - Update arbitrator analysis after completion
+    - _Requirements: 2.2, 2.3, 2.5, 6.1, 6.2, 6.3, 6.4_
+  - [x] 2.3 Implement handleCrossImpact function
+    - Make API call with session_id from apiResponse
+    - Parse phase2_revision from response using parseAuditTrail
+    - Display phase2Messages with same animation pattern
+    - Update solutions if new ones are provided
+    - Handle API errors gracefully
+    - _Requirements: 4.2, 4.3, 4.4, 4.5, 4.6, 7.3, 7.4_
+  - [x] 2.4 Update stage transitions
+    - Transition to 'waiting_for_user' after phase1 completes
+    - Transition to 'decision_phase' after phase2 completes
+    - Update arbitrator analysis text for each stage
+    - _Requirements: 2.6, 4.7_
+  - [ ]\* 2.5 Write unit tests for OrchestrationView
+    - Test phase1 display with mock API response
+    - Test cross-impact workflow
+    - Test error handling for missing data
+    - Test stage transitions
+
+- [x] 3. Checkpoint - Ensure ResponseMapper and OrchestrationView work together
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 4. Update AgentMessage component for new fields
+  - [x] 4.1 Add rendering for recommendation field
+    - Display recommendation in a dedicated section
+    - Use appropriate styling and icon
+    - Handle missing recommendation gracefully
+    - _Requirements: 2.4_
+  - [x] 4.2 Add rendering for reasoning field
+    - Display reasoning in a dedicated section
+    - Use appropriate styling and icon
+    - Handle missing reasoning gracefully
+    - _Requirements: 2.4_
+  - [x] 4.3 Add rendering for data_sources field
+    - Display data_sources as a formatted list
+    - Show only when data_sources array is non-empty
+    - Format database queries readably
+    - _Requirements: 2.4, 10.1, 10.2, 10.3, 10.4, 10.5_
+  - [x] 4.4 Add error indicator for failed agents
+    - Check if message.status === 'error'
+    - Display error badge and styling
+    - Show error details if available
+    - _Requirements: 7.1_
+  - [ ]\* 4.5 Write property test for complete content rendering
+    - **Property 9: Complete Content Rendering**
+    - **Validates: Requirements 2.4, 5.4, 5.7**
+  - [ ]\* 4.6 Write unit tests for AgentMessage
+    - Test rendering with all fields populated
+    - Test rendering with missing optional fields
+    - Test error state rendering
+    - Test data_sources formatting
+
+- [x] 5. Update ArbitratorPanel for solution cards
+  - [x] 5.1 Create SolutionCard sub-component
+    - Display title, description, and recommendations array
+    - Show AI Recommended badge for recommended solutions
+    - Display scoring bars for all score properties
+    - Show risk badge derived from scores
+    - Add "View More" button for expansion
+    - _Requirements: 5.2, 5.3, 5.4, 5.5_
+  - [x] 5.2 Create ExpandedSolutionView modal
+    - Display all solution fields in organized sections
+    - Show justification, reasoning, and impact analysis
+    - Display pros, cons, and risks as formatted lists
+    - Add close button and styling
+    - _Requirements: 5.6, 5.7_
+  - [x] 5.3 Update ArbitratorPanel to render solution cards
+    - Map solutions array to SolutionCard components
+    - Handle 1-3 solution cards with responsive layout
+    - Pass onSelectSolution callback to cards
+    - Disable cards after selection
+    - _Requirements: 5.1, 5.2, 8.5_
+  - [ ]\* 5.4 Write property test for solution recommendation identification
+    - **Property 7: Solution Recommendation Identification**
+    - **Validates: Requirements 5.3**
+  - [ ]\* 5.5 Write property test for risk level derivation
+    - **Property 8: Risk Level Derivation**
+    - **Validates: Requirements 5.5**
+  - [ ]\* 5.6 Write unit tests for ArbitratorPanel
+    - Test solution card rendering
+    - Test recommendation badge display
+    - Test expanded view modal
+    - Test solution selection behavior
+
+- [x] 6. Implement solution selection workflow
+  - [x] 6.1 Update handleSolutionSelect in OrchestrationView
+    - Set selectedSolutionId state
+    - Create decision message with solution details
+    - Add decision message to message stream
+    - Update arbitrator analysis text
+    - _Requirements: 8.1, 8.2, 8.4, 8.6_
+  - [x] 6.2 Update AgentMessage to render decision cards
+    - Check for isDecision flag
+    - Render special decision card styling
+    - Display solution title and execution status
+    - Add action buttons for recovery workflow and report
+    - _Requirements: 8.3_
+  - [ ]\* 6.3 Write unit tests for solution selection
+    - Test handleSolutionSelect callback
+    - Test decision message creation
+    - Test decision card rendering
+
+- [x] 7. Add loading state management
+  - [x] 7.1 Move loading logic from App to OrchestrationView
+    - Accept loading and progress props from App
+    - Display centered loading indicator during 'summoning' stage
+    - Show dynamic loading messages in arbitrator panel
+    - Hide loading indicator when status is 'complete'
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+  - [ ]\* 7.2 Write unit tests for loading states
+    - Test loading indicator display
+    - Test progress message updates
+    - Test transition from loading to content
+
+- [x] 8. Implement responsive design
+  - [x] 8.1 Add responsive CSS for ArbitratorPanel
+    - Hide panel on mobile (< 768px)
+    - Show panel at 28% width on desktop (>= 768px)
+    - Ensure solution cards are accessible on mobile
+    - _Requirements: 9.1, 9.2, 9.5_
+  - [x] 8.2 Add responsive spacing for agent roster
+    - Use gap-4 on mobile, gap-6 on desktop
+    - Ensure avatars are visible on small screens
+    - _Requirements: 9.3_
+  - [x] 8.3 Add responsive padding for message stream
+    - Use px-4 on mobile, px-12 on desktop
+    - Ensure messages are readable on all screen sizes
+    - _Requirements: 9.4_
+  - [ ]\* 8.4 Write unit tests for responsive behavior
+    - Test component rendering at different viewport sizes
+    - Test CSS class application
+
+- [x] 9. Checkpoint - Ensure all components work together
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 10. Add error handling and edge cases
+  - [x] 10.1 Add error handling for API failures
+    - Display user-friendly error messages
+    - Provide retry option for failed requests
+    - Log errors for debugging
+    - _Requirements: 7.6_
+  - [x] 10.2 Add validation for score values
+    - Clamp scores to 0-100 range
+    - Use default value of 50 for invalid scores
+    - Log validation warnings
+    - _Requirements: Error Handling section_
+  - [x] 10.3 Add validation for array fields
+    - Convert non-arrays to empty arrays
+    - Filter out non-string values from arrays
+    - Ensure at least one recommendation per solution
+    - _Requirements: Error Handling section_
+  - [ ]\* 10.4 Write unit tests for error handling
+    - Test API error display
+    - Test score validation
+    - Test array validation
+
+- [x] 11. Final integration testing
+  - [x] 11.1 Test complete phase1 → phase2 → decision flow
+    - Use real API response examples
+    - Verify all data is displayed correctly
+    - Test user interactions work as expected
+    - _Requirements: All requirements_
+  - [x] 11.2 Test error recovery scenarios
+    - Test with missing audit_trail
+    - Test with malformed phase data
+    - Test with agent errors
+    - Test with API failures
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.6_
+  - [ ]\* 11.3 Run all property-based tests
+    - Verify all 9 properties pass with 100+ iterations
+    - Check for any edge cases discovered by generators
+    - Fix any issues found
+
+- [x] 12. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties
+- Unit tests validate specific examples and edge cases
+- The implementation follows a bottom-up approach: data layer → display layer → integration
+- All TypeScript interfaces should be properly typed to catch errors at compile time
+- Use existing component patterns and styling for consistency

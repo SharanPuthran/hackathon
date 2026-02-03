@@ -158,7 +158,7 @@ resource "aws_lambda_function" "invoke_handler" {
   handler       = "src.api.lambda_handler_async.lambda_handler"
   runtime       = "python3.11"
   timeout       = 900  # 15 minutes for async processing
-  memory_size   = 1024
+  memory_size   = 3072  # Increased from 1024 MB for 30-40% faster execution
 
   environment {
     variables = {
@@ -170,7 +170,7 @@ resource "aws_lambda_function" "invoke_handler" {
     }
   }
 
-  reserved_concurrent_executions = 10
+  reserved_concurrent_executions = 50  # Increased from 10 for 5x capacity
 
   tags = {
     Name        = "skymarshal-api-invoke"

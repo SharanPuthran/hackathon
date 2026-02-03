@@ -4,8 +4,10 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from functools import wraps
 
 from bedrock_agentcore import BedrockAgentCoreApp
 
@@ -22,7 +24,8 @@ from agents.arbitrator import arbitrate
 from agents.schemas import AgentResponse, Collation
 from checkpoint import CheckpointSaver, ThreadManager
 from mcp_client.client import get_streamable_http_mcp_client
-from model.load import load_model
+from model.load import load_model, load_model_for_agent
+from utils.response_formatting import format_agent_response_compact, get_compact_context
 
 # Configure comprehensive logging
 logging.basicConfig(
@@ -32,6 +35,43 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def log_timing(func_name: str = None):
+    """Decorator to log function execution timing with detailed breakdown."""
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            name = func_name or func.__name__
+            start = time.time()
+            logger.info(f"⏱️  [{name}] START")
+            try:
+                result = await func(*args, **kwargs)
+                duration = time.time() - start
+                logger.info(f"⏱️  [{name}] COMPLETE in {duration:.3f}s")
+                return result
+            except Exception as e:
+                duration = time.time() - start
+                logger.error(f"⏱️  [{name}] FAILED after {duration:.3f}s: {e}")
+                raise
+        
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            name = func_name or func.__name__
+            start = time.time()
+            logger.info(f"⏱️  [{name}] START")
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start
+                logger.info(f"⏱️  [{name}] COMPLETE in {duration:.3f}s")
+                return result
+            except Exception as e:
+                duration = time.time() - start
+                logger.error(f"⏱️  [{name}] FAILED after {duration:.3f}s: {e}")
+                raise
+        
+        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+    return decorator
 
 # Initialize AgentCore app
 app = BedrockAgentCoreApp()
@@ -69,45 +109,68 @@ BUSINESS_AGENTS: List[Tuple[str, Callable]] = [
     ("finance", analyze_finance),
 ]
 
+# Safety agent names for failure detection
+SAFETY_AGENT_NAMES = ["crew_compliance", "maintenance", "regulatory"]
+
+# Configurable timeouts per agent type (in seconds)
+# Safety agents: 60s (critical path, accuracy required)
+# Business agents: 45s (can tolerate faster execution)
+AGENT_TIMEOUTS = {
+    "crew_compliance": 60,    # Safety-critical: FDP limits, rest requirements
+    "maintenance": 60,         # Safety-critical: Aircraft airworthiness
+    "regulatory": 60,          # Safety-critical: Regulatory compliance
+    "network": 45,             # Business optimization: Network impact
+    "guest_experience": 45,    # Business optimization: Passenger experience
+    "cargo": 45,               # Business optimization: Cargo handling
+    "finance": 45,             # Business optimization: Financial impact
+}
+
+# Arbitrator timeout (complex reasoning and conflict resolution)
+ARBITRATOR_TIMEOUT = 90
+
 
 def augment_prompt_phase1(user_prompt: str) -> str:
     """
-    Augment user prompt with Phase 1 instructions.
+    Augment user prompt with Phase 1 instructions using optimized XML format.
     
-    Adds instruction for initial recommendation while preserving
-    the original user prompt content unchanged.
+    Uses concise XML structure optimized for agent-to-agent communication.
+    Removes verbose human-oriented explanations to reduce token usage.
     
     Args:
         user_prompt: Original natural language prompt from user
         
     Returns:
-        str: Augmented prompt with phase-specific instructions
+        str: XML-formatted prompt optimized for Claude
         
     Example:
         >>> original = "Flight EY123 on Jan 20th had a mechanical failure"
         >>> augmented = augment_prompt_phase1(original)
         >>> print(augmented)
-        Flight EY123 on Jan 20th had a mechanical failure
-        
-        Please analyze this disruption and provide your initial recommendation from your domain perspective.
+        <disruption>Flight EY123 on Jan 20th had a mechanical failure</disruption>
+        <task>initial_analysis</task>
     """
-    instruction = "Please analyze this disruption and provide your initial recommendation from your domain perspective."
-    return f"{user_prompt}\n\n{instruction}"
+    from utils.prompts import OptimizedPrompt
+    
+    prompt = OptimizedPrompt(
+        disruption=user_prompt,
+        task="initial_analysis"
+    )
+    return prompt.to_xml_phase1()
 
 
 def augment_prompt_phase2(user_prompt: str, initial_collation: dict) -> str:
     """
-    Augment user prompt with Phase 2 instructions and initial recommendations.
+    Augment user prompt with Phase 2 instructions using optimized XML format.
     
-    Adds instruction for revision round along with other agents' initial
-    recommendations, while preserving the original user prompt content.
+    Uses structured XML with nested agent tags for efficient machine parsing.
+    Includes recommendation, confidence, and constraints from Phase 1.
     
     Args:
         user_prompt: Original natural language prompt from user
         initial_collation: Collated initial recommendations from all agents
         
     Returns:
-        str: Augmented prompt with phase-specific instructions and collation
+        str: XML-formatted prompt with structured context
         
     Example:
         >>> original = "Flight EY123 on Jan 20th had a mechanical failure"
@@ -115,25 +178,25 @@ def augment_prompt_phase2(user_prompt: str, initial_collation: dict) -> str:
         ...     "responses": {
         ...         "crew_compliance": {
         ...             "recommendation": "Crew is available",
-        ...             "confidence": 0.95
+        ...             "confidence": 0.95,
+        ...             "binding_constraints": ["FDP limit: 13h"]
         ...         }
         ...     }
         ... }
         >>> augmented = augment_prompt_phase2(original, collation)
-        >>> # Returns original prompt + other agents' recommendations + instruction
+        >>> # Returns XML with <disruption>, <task>, and <context> tags
     """
-    instruction = "Review other agents' recommendations and revise if needed."
+    from utils.prompts import OptimizedPrompt
     
-    # Format initial recommendations for context
-    recommendations_text = "\n\nOther agents have provided the following recommendations:\n"
-    for agent_name, response in initial_collation.get("responses", {}).items():
-        recommendations_text += f"\n{agent_name.upper()}:\n"
-        recommendations_text += f"  Recommendation: {response.get('recommendation', 'N/A')}\n"
-        recommendations_text += f"  Confidence: {response.get('confidence', 'N/A')}\n"
-        if response.get('binding_constraints'):
-            recommendations_text += f"  Binding Constraints: {response.get('binding_constraints')}\n"
+    # Extract responses from collation
+    context = initial_collation.get("responses", {})
     
-    return f"{user_prompt}{recommendations_text}\n\n{instruction}"
+    prompt = OptimizedPrompt(
+        disruption=user_prompt,
+        task="revision",
+        context=context
+    )
+    return prompt.to_xml_phase2()
 
 
 async def run_agent_safely(
@@ -187,10 +250,13 @@ async def run_agent_safely(
         logger.info(f"🚀 Starting {agent_name} agent...")
         logger.debug(f"   Payload keys: {list(payload.keys())}")
         logger.debug(f"   MCP tools count: {len(mcp_tools)}")
-
+        
+        # Time the agent execution
+        agent_start = time.time()
         result = await asyncio.wait_for(
             agent_fn(payload, llm, mcp_tools), timeout=timeout
         )
+        agent_duration = time.time() - agent_start
 
         duration = (datetime.now() - start_time).total_seconds()
         # Only set status to success if not already set by agent
@@ -200,8 +266,14 @@ async def run_agent_safely(
         # Always ensure agent name is in result
         result["agent"] = agent_name
 
+        # Log detailed timing breakdown
+        logger.info(f"⏱️  [{agent_name}] Agent execution: {agent_duration:.3f}s")
+        logger.info(f"⏱️  [{agent_name}] Total with overhead: {duration:.3f}s")
+        logger.info(f"⏱️  [{agent_name}] Overhead: {(duration - agent_duration):.3f}s")
+
         # Save checkpoint at agent completion
         if thread_id and checkpoint_saver:
+            checkpoint_start = time.time()
             await checkpoint_saver.save_checkpoint(
                 thread_id=thread_id,
                 checkpoint_id=f"{agent_name}_complete",
@@ -215,7 +287,8 @@ async def run_agent_safely(
                     "duration_seconds": duration
                 }
             )
-            logger.debug(f"   💾 Checkpoint saved: {agent_name}_complete")
+            checkpoint_duration = time.time() - checkpoint_start
+            logger.debug(f"   💾 Checkpoint saved: {agent_name}_complete ({checkpoint_duration:.3f}s)")
 
         logger.info(f"✅ {agent_name} completed successfully in {duration:.2f}s")
         logger.debug(f"   Result keys: {list(result.keys())}")
@@ -223,15 +296,23 @@ async def run_agent_safely(
 
     except asyncio.TimeoutError:
         duration = (datetime.now() - start_time).total_seconds()
+        
+        # Determine if this is a safety-critical agent
+        is_safety_critical = agent_name in SAFETY_AGENT_NAMES
+        
         logger.error(
             f"⏱ {agent_name} timeout after {timeout}s (actual: {duration:.2f}s)"
         )
+        if is_safety_critical:
+            logger.error(f"   ⚠️  CRITICAL: {agent_name} is a safety-critical agent")
         
         error_result = {
             "agent": agent_name,
             "status": "timeout",
             "error": f"Agent execution exceeded {timeout} second timeout",
             "duration_seconds": duration,
+            "is_safety_critical": is_safety_critical,
+            "timeout_threshold": timeout,
         }
         
         # Save checkpoint on timeout
@@ -254,7 +335,13 @@ async def run_agent_safely(
         
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
+        
+        # Determine if this is a safety-critical agent
+        is_safety_critical = agent_name in SAFETY_AGENT_NAMES
+        
         logger.error(f"❌ {agent_name} error after {duration:.2f}s: {e}")
+        if is_safety_critical:
+            logger.error(f"   ⚠️  CRITICAL: {agent_name} is a safety-critical agent")
         logger.exception(f"Full traceback for {agent_name}:")
         
         error_result = {
@@ -263,6 +350,7 @@ async def run_agent_safely(
             "error": str(e),
             "error_type": type(e).__name__,
             "duration_seconds": duration,
+            "is_safety_critical": is_safety_critical,
         }
         
         # Save checkpoint on error
@@ -299,11 +387,14 @@ async def phase1_initial_recommendations(
     Invoke all 7 agents in parallel with the user prompt plus instructions.
     Agents are responsible for extracting flight info and performing lookups.
     
+    Safety agents use Sonnet 4.5 for accuracy-critical analysis.
+    Business agents use Haiku 4.5 for speed and cost optimization.
+    
     Saves checkpoints before and after phase execution for failure recovery.
     
     Args:
         user_prompt: Natural language prompt from user
-        llm: Model instance
+        llm: Model instance (unused - agents load their own models)
         mcp_tools: MCP tools
         thread_id: Optional thread identifier for checkpoint persistence
         checkpoint_saver: Optional checkpoint saver for state persistence
@@ -342,15 +433,66 @@ async def phase1_initial_recommendations(
     logger.debug(f"   Agents: {[name for name, _ in all_agents]}")
     
     # Run all agents in parallel with checkpoint support
+    # Load agent-specific models: safety agents use Sonnet, business agents use Haiku
     phase_start = datetime.now()
-    agent_tasks = [
-        run_agent_safely(name, fn, payload, llm, mcp_tools, timeout=60, thread_id=thread_id, checkpoint_saver=checkpoint_saver)
-        for name, fn in all_agents
-    ]
+    agent_tasks = []
+    for name, fn in all_agents:
+        # Determine agent type based on agent list membership
+        agent_type = "safety" if name in SAFETY_AGENT_NAMES else "business"
+        agent_llm = load_model_for_agent(agent_type)
+        
+        agent_tasks.append(
+            run_agent_safely(
+                name, fn, payload, agent_llm, mcp_tools, 
+                timeout=AGENT_TIMEOUTS.get(name, 60),  # Agent-specific timeout
+                thread_id=thread_id, 
+                checkpoint_saver=checkpoint_saver
+            )
+        )
+    
     agent_results = await asyncio.gather(*agent_tasks)
     phase_duration = (datetime.now() - phase_start).total_seconds()
     
     logger.info(f"   Phase 1 completed in {phase_duration:.2f}s")
+    
+    # Check for safety agent failures - halt execution if any safety agent failed
+    safety_failures = [
+        result for result in agent_results 
+        if result.get("agent") in SAFETY_AGENT_NAMES 
+        and result.get("status") in ["timeout", "error"]
+    ]
+    
+    if safety_failures:
+        failed_agents = [r.get("agent") for r in safety_failures]
+        logger.error(f"❌ SAFETY AGENT FAILURE in Phase 1: {failed_agents}")
+        logger.error("   Halting execution - manual intervention required")
+        
+        # Save failure checkpoint
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id="phase1_safety_failure_halt",
+                state={
+                    "failed_agents": failed_agents,
+                    "failures": safety_failures,
+                    "all_results": agent_results
+                },
+                metadata={
+                    "phase": "phase1",
+                    "status": "halted",
+                    "reason": "safety_agent_failure",
+                    "timestamp": datetime.now().isoformat(),
+                    "failed_agents": failed_agents
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: phase1_safety_failure_halt")
+        
+        # Raise exception to halt execution
+        raise RuntimeError(
+            f"Safety-critical agent(s) failed in Phase 1: {failed_agents}. "
+            f"Manual intervention required. Cannot proceed with disruption analysis. "
+            f"Errors: {[r.get('error') for r in safety_failures]}"
+        )
     
     # Collate responses using Pydantic model
     responses = {}
@@ -433,12 +575,15 @@ async def phase2_revision_round(
     Invoke all 7 agents with user prompt, initial recommendations, and revision instructions.
     Agents review others' recommendations and revise their own.
     
+    Safety agents use Sonnet 4.5 for accuracy-critical analysis.
+    Business agents use Haiku 4.5 for speed and cost optimization.
+    
     Loads Phase 1 checkpoint and saves Phase 2 checkpoints for failure recovery.
     
     Args:
         user_prompt: Original natural language prompt from user
         initial_collation: Collated initial recommendations from phase 1
-        llm: Model instance
+        llm: Model instance (unused - agents load their own models)
         mcp_tools: MCP tools
         thread_id: Optional thread identifier for checkpoint persistence
         checkpoint_saver: Optional checkpoint saver for state persistence
@@ -465,27 +610,29 @@ async def phase2_revision_round(
         )
         logger.debug(f"   ✅ Phase 2 start checkpoint saved")
     
-    # Convert Collation to dict for augment_prompt_phase2
+    # Convert Collation to compact dict for augment_prompt_phase2
+    # Apply compact formatting to reduce token usage in A2A communication
+    compact_responses = {
+        name: format_agent_response_compact(response.model_dump())
+        for name, response in initial_collation.responses.items()
+    }
+
     initial_collation_dict = {
         "phase": initial_collation.phase,
-        "responses": {
-            name: response.model_dump() for name, response in initial_collation.responses.items()
-        },
+        "responses": compact_responses,
         "timestamp": initial_collation.timestamp,
         "duration_seconds": initial_collation.duration_seconds
     }
-    
-    # Augment prompt with phase 2 instructions and initial collation
+
+    # Augment prompt with phase 2 instructions and compact collation
     augmented_prompt = augment_prompt_phase2(user_prompt, initial_collation_dict)
     logger.debug(f"   Augmented prompt length: {len(augmented_prompt)} chars")
-    
-    # Create payload with augmented prompt and other recommendations
+
+    # Create payload with augmented prompt and compact recommendations
     payload = {
         "user_prompt": augmented_prompt,
         "phase": "revision",
-        "other_recommendations": {
-            name: response.model_dump() for name, response in initial_collation.responses.items()
-        }
+        "other_recommendations": compact_responses
     }
     
     # Get all agents (safety + business)
@@ -493,15 +640,67 @@ async def phase2_revision_round(
     logger.debug(f"   Agents: {[name for name, _ in all_agents]}")
     
     # Run all agents in parallel with checkpoint support
+    # Load agent-specific models: safety agents use Sonnet, business agents use Haiku
+    # Phase 2 has longer timeout (base + 30s) since agents review other recommendations
     phase_start = datetime.now()
-    agent_tasks = [
-        run_agent_safely(name, fn, payload, llm, mcp_tools, timeout=60, thread_id=thread_id, checkpoint_saver=checkpoint_saver)
-        for name, fn in all_agents
-    ]
+    agent_tasks = []
+    for name, fn in all_agents:
+        # Determine agent type based on agent list membership
+        agent_type = "safety" if name in SAFETY_AGENT_NAMES else "business"
+        agent_llm = load_model_for_agent(agent_type)
+        
+        agent_tasks.append(
+            run_agent_safely(
+                name, fn, payload, agent_llm, mcp_tools, 
+                timeout=AGENT_TIMEOUTS.get(name, 60) + 30,  # Add 30s for revision complexity
+                thread_id=thread_id, 
+                checkpoint_saver=checkpoint_saver
+            )
+        )
+    
     agent_results = await asyncio.gather(*agent_tasks)
     phase_duration = (datetime.now() - phase_start).total_seconds()
     
     logger.info(f"   Phase 2 completed in {phase_duration:.2f}s")
+    
+    # Check for safety agent failures - halt execution if any safety agent failed
+    safety_failures = [
+        result for result in agent_results 
+        if result.get("agent") in SAFETY_AGENT_NAMES 
+        and result.get("status") in ["timeout", "error"]
+    ]
+    
+    if safety_failures:
+        failed_agents = [r.get("agent") for r in safety_failures]
+        logger.error(f"❌ SAFETY AGENT FAILURE in Phase 2: {failed_agents}")
+        logger.error("   Halting execution - manual intervention required")
+        
+        # Save failure checkpoint
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id="phase2_safety_failure_halt",
+                state={
+                    "failed_agents": failed_agents,
+                    "failures": safety_failures,
+                    "all_results": agent_results
+                },
+                metadata={
+                    "phase": "phase2",
+                    "status": "halted",
+                    "reason": "safety_agent_failure",
+                    "timestamp": datetime.now().isoformat(),
+                    "failed_agents": failed_agents
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: phase2_safety_failure_halt")
+        
+        # Raise exception to halt execution
+        raise RuntimeError(
+            f"Safety-critical agent(s) failed in Phase 2 revision: {failed_agents}. "
+            f"Manual intervention required. Cannot proceed with disruption analysis. "
+            f"Errors: {[r.get('error') for r in safety_failures]}"
+        )
     
     # Collate responses using Pydantic model
     responses = {}
@@ -583,11 +782,13 @@ async def phase3_arbitration(
     Invoke arbitrator with all revised recommendations.
     Arbitrator resolves conflicts and makes final decision.
     
+    Uses Sonnet 4.5 for complex reasoning and conflict resolution.
+    
     Loads Phase 1 and Phase 2 checkpoints and saves final decision checkpoint.
     
     Args:
         revised_collation: Collated revised recommendations from phase 2 (Collation model)
-        llm: Model instance (Opus 4.5 for arbitrator)
+        llm: Model instance (unused - arbitrator loads its own model)
         thread_id: Optional thread identifier for checkpoint persistence
         checkpoint_saver: Optional checkpoint saver for state persistence
         initial_collation: Optional collated initial recommendations from phase 1 (Collation model).
@@ -636,13 +837,21 @@ async def phase3_arbitration(
     phase_start = datetime.now()
     
     try:
+        # Load arbitrator model (Sonnet 4.5 for complex reasoning)
+        arbitrator_llm = load_model_for_agent("arbitrator")
+        
         # Call arbitrator with revised collation and optional initial collation
-        # Note: arbitrator will load Opus 4.5 model internally if llm is None
         if initial_collation is not None:
             logger.info("   Invoking arbitrator with both Phase 1 and Phase 2 recommendations")
         else:
             logger.info("   Invoking arbitrator with Phase 2 recommendations only (legacy mode)")
-        result = await arbitrate(revised_collation, llm_opus=None, initial_recommendations=initial_collation)
+        
+        # Wrap arbitrator call with timeout (90s for complex reasoning)
+        logger.debug(f"   Arbitrator timeout: {ARBITRATOR_TIMEOUT}s")
+        result = await asyncio.wait_for(
+            arbitrate(revised_collation, llm_opus=arbitrator_llm, initial_recommendations=initial_collation),
+            timeout=ARBITRATOR_TIMEOUT
+        )
         
         # Add phase metadata
         result["phase"] = "arbitration"
@@ -671,6 +880,54 @@ async def phase3_arbitration(
         logger.info(f"   Confidence: {result.get('confidence', 0.0):.2f}")
         
         return result
+        
+    except asyncio.TimeoutError:
+        # Handle arbitrator timeout
+        logger.error(f"   ⏱ Arbitrator timeout after {ARBITRATOR_TIMEOUT}s")
+        
+        phase_duration = (datetime.now() - phase_start).total_seconds()
+        
+        # Extract all recommendations for fallback
+        recommendations = []
+        for agent_name, response in revised_collation.responses.items():
+            if response.status == "success":
+                rec = response.recommendation
+                recommendations.append(f"{agent_name}: {rec}")
+        
+        fallback_decision = {
+            "phase": "arbitration",
+            "final_decision": f"Arbitration timeout after {ARBITRATOR_TIMEOUT}s - manual review required. Apply most conservative safety recommendations.",
+            "recommendations": recommendations,
+            "conflicts_identified": [],
+            "conflict_resolutions": [],
+            "safety_overrides": [],
+            "justification": f"Arbitration exceeded {ARBITRATOR_TIMEOUT} second timeout. Defaulting to conservative approach requiring manual review.",
+            "reasoning": "Fallback to conservative decision due to arbitration timeout",
+            "confidence": 0.0,
+            "timestamp": datetime.now().isoformat(),
+            "duration_seconds": phase_duration,
+            "error": f"Arbitrator timeout after {ARBITRATOR_TIMEOUT}s",
+            "status": "timeout"
+        }
+        
+        # Save timeout checkpoint
+        if thread_id and checkpoint_saver:
+            await checkpoint_saver.save_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id="phase3_timeout",
+                state=fallback_decision,
+                metadata={
+                    "phase": "phase3",
+                    "status": "timeout",
+                    "timestamp": datetime.now().isoformat(),
+                    "duration_seconds": phase_duration
+                }
+            )
+            logger.debug(f"   💾 Checkpoint saved: phase3_timeout")
+        
+        logger.info(f"   Phase 3 completed (timeout fallback) in {phase_duration:.2f}s")
+        
+        return fallback_decision
         
     except Exception as e:
         # Fallback to conservative decision on error
@@ -750,17 +1007,20 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
     logger.info(f"📝 Processing prompt: {user_prompt[:100]}...")
     logger.info("📋 Agents will extract required information from prompt and database")
     
-    orchestration_start = datetime.now()
+    orchestration_start = time.time()
     
     # Create thread for this workflow
+    thread_start = time.time()
     thread_id = thread_manager.create_thread(
         user_prompt=user_prompt,
-        metadata={"orchestration_start": orchestration_start.isoformat()}
+        metadata={"orchestration_start": datetime.now().isoformat()}
     )
-    logger.info(f"🧵 Thread created: {thread_id}")
+    thread_time = time.time() - thread_start
+    logger.info(f"🧵 Thread created: {thread_id} ({thread_time:.3f}s)")
     
     try:
         # Save initial checkpoint
+        checkpoint_start = time.time()
         await checkpoint_saver.save_checkpoint(
             thread_id=thread_id,
             checkpoint_id="start",
@@ -770,32 +1030,47 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
                 "timestamp": datetime.now().isoformat()
             }
         )
-        logger.debug(f"   ✅ Initial checkpoint saved")
+        checkpoint_time = time.time() - checkpoint_start
+        logger.debug(f"   ✅ Initial checkpoint saved ({checkpoint_time:.3f}s)")
         
         # Phase 1: Initial Recommendations
+        logger.info("⏱️  [PHASE 1] Starting initial recommendations...")
+        phase1_start = time.time()
         initial_collation = await phase1_initial_recommendations(
             user_prompt, llm, mcp_tools, thread_id, checkpoint_saver
         )
+        phase1_time = time.time() - phase1_start
+        logger.info(f"⏱️  [PHASE 1] Completed in {phase1_time:.3f}s")
         
         # Phase 2: Revision Round
+        logger.info("⏱️  [PHASE 2] Starting revision round...")
+        phase2_start = time.time()
         revised_collation = await phase2_revision_round(
             user_prompt, initial_collation, llm, mcp_tools, thread_id, checkpoint_saver
         )
+        phase2_time = time.time() - phase2_start
+        logger.info(f"⏱️  [PHASE 2] Completed in {phase2_time:.3f}s")
         
         # Phase 3: Arbitration
+        logger.info("⏱️  [PHASE 3] Starting arbitration...")
+        phase3_start = time.time()
         final_decision = await phase3_arbitration(
             revised_collation, llm, thread_id, checkpoint_saver, initial_collation
         )
+        phase3_time = time.time() - phase3_start
+        logger.info(f"⏱️  [PHASE 3] Completed in {phase3_time:.3f}s")
         
         # Calculate total duration
-        total_duration = (datetime.now() - orchestration_start).total_seconds()
+        total_duration = time.time() - orchestration_start
         
         # Mark thread as complete
+        complete_start = time.time()
         thread_manager.mark_thread_complete(
             thread_id=thread_id,
             result=final_decision
         )
-        logger.info(f"   ✅ Thread marked complete: {thread_id}")
+        complete_time = time.time() - complete_start
+        logger.info(f"   ✅ Thread marked complete: {thread_id} ({complete_time:.3f}s)")
         
         # Build complete response with audit trail
         response = {
@@ -810,9 +1085,9 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
                 "phase3_arbitration": final_decision
             },
             "timestamp": datetime.now().isoformat(),
-            "phase1_duration_seconds": initial_collation.duration_seconds,
-            "phase2_duration_seconds": revised_collation.duration_seconds,
-            "phase3_duration_seconds": final_decision.get("duration_seconds", 0),
+            "phase1_duration_seconds": phase1_time,
+            "phase2_duration_seconds": phase2_time,
+            "phase3_duration_seconds": phase3_time,
             "total_duration_seconds": total_duration
         }
 
@@ -822,9 +1097,11 @@ async def handle_disruption(user_prompt: str, llm: Any, mcp_tools: list) -> dict
         logger.info(f"📚 Knowledge Base: considered={kb_considered}, documents_found={kb_docs}")
 
         logger.info("=" * 60)
-        logger.info(
-            f"✅ Orchestrator Complete (Total: {total_duration:.2f}s)"
-        )
+        logger.info(f"⏱️  [TIMING SUMMARY]")
+        logger.info(f"   Phase 1: {phase1_time:.3f}s ({phase1_time/total_duration*100:.1f}%)")
+        logger.info(f"   Phase 2: {phase2_time:.3f}s ({phase2_time/total_duration*100:.1f}%)")
+        logger.info(f"   Phase 3: {phase3_time:.3f}s ({phase3_time/total_duration*100:.1f}%)")
+        logger.info(f"   TOTAL: {total_duration:.3f}s")
         logger.info("=" * 60)
 
         return response
@@ -864,7 +1141,7 @@ async def invoke(payload):
     Returns:
         dict: Agent response or aggregated orchestrator response
     """
-    request_start = datetime.now()
+    request_start = time.time()
     logger.info("=" * 80)
     logger.info("🎯 NEW REQUEST RECEIVED")
     logger.info("=" * 80)
@@ -892,24 +1169,35 @@ async def invoke(payload):
             }
 
         # Load shared resources
-        logger.info("🔧 Loading shared resources...")
+        logger.info("⏱️  [SETUP] Loading shared resources...")
+        setup_start = time.time()
 
         logger.debug("   Loading model...")
+        model_start = time.time()
         llm = load_model()
-        logger.info("   ✅ Model loaded (Claude Sonnet 4.5)")
+        model_time = time.time() - model_start
+        logger.info(f"   ✅ Model loaded in {model_time:.3f}s (Claude Sonnet 4.5)")
 
         logger.debug("   Loading MCP client...")
+        mcp_start = time.time()
         mcp_client = get_streamable_http_mcp_client()
-        logger.info("   ✅ MCP client loaded")
+        mcp_time = time.time() - mcp_start
+        logger.info(f"   ✅ MCP client loaded in {mcp_time:.3f}s")
 
         logger.debug("   Getting MCP tools...")
+        tools_start = time.time()
         mcp_tools = await mcp_client.get_tools()
-        logger.info(f"   ✅ MCP tools loaded ({len(mcp_tools)} tools)")
+        tools_time = time.time() - tools_start
+        logger.info(f"   ✅ MCP tools loaded in {tools_time:.3f}s ({len(mcp_tools)} tools)")
+        
+        setup_time = time.time() - setup_start
+        logger.info(f"⏱️  [SETUP] Total setup time: {setup_time:.3f}s")
 
         # Normalize payload to use user_prompt
         normalized_payload = {"user_prompt": user_prompt}
 
         # Determine routing
+        routing_start = time.time()
         if agent_name == "orchestrator":
             # Run all agents (safety → business)
             logger.info("🎯 Routing to ORCHESTRATOR (all agents)")
@@ -932,21 +1220,26 @@ async def invoke(payload):
                 "error": f"Unknown agent: {agent_name}",
                 "available_agents": available,
             }
+        
+        routing_time = time.time() - routing_start
+        logger.info(f"⏱️  [ROUTING] Agent execution time: {routing_time:.3f}s")
 
         # Calculate total duration
-        total_duration = (datetime.now() - request_start).total_seconds()
+        total_duration = time.time() - request_start
         result["request_duration_seconds"] = total_duration
 
         logger.info("=" * 80)
-        logger.info(f"✅ REQUEST COMPLETED in {total_duration:.2f}s")
+        logger.info(f"⏱️  [TOTAL] REQUEST COMPLETED in {total_duration:.3f}s")
+        logger.info(f"   Setup: {setup_time:.3f}s ({setup_time/total_duration*100:.1f}%)")
+        logger.info(f"   Execution: {routing_time:.3f}s ({routing_time/total_duration*100:.1f}%)")
         logger.info("=" * 80)
 
         return result
 
     except Exception as e:
-        total_duration = (datetime.now() - request_start).total_seconds()
+        total_duration = time.time() - request_start
         logger.error("=" * 80)
-        logger.error(f"❌ ORCHESTRATOR INVOCATION FAILED after {total_duration:.2f}s")
+        logger.error(f"❌ ORCHESTRATOR INVOCATION FAILED after {total_duration:.3f}s")
         logger.error("=" * 80)
         logger.error(f"Error: {e}")
         logger.exception("Full traceback:")

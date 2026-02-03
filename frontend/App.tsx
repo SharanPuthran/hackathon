@@ -17,17 +17,17 @@ const App: React.FC = () => {
     setUserPrompt(prompt);
     clearError();
 
+    // Navigate to orchestration view immediately
+    setCurrentView("orchestration");
+
     try {
       // Use async polling API
       const response = await invoke(prompt);
       setApiResponse(response);
-
-      // Transition to orchestration view on success
-      setCurrentView("orchestration");
     } catch (err) {
       // Error is already set by useAPI hook
       console.error("Failed to invoke API:", err);
-      // Stay on landing page to show error
+      // Stay on orchestration view to show error
     }
   };
 
@@ -51,17 +51,30 @@ const App: React.FC = () => {
             onRetry={handleRetry}
           />
         )}
-        {currentView === "orchestration" && apiResponse && (
+        {currentView === "orchestration" && (
           <OrchestrationView
             prompt={userPrompt}
-            apiResponse={{
-              status: "success",
-              request_id: apiResponse.request_id,
-              session_id: apiResponse.session_id || "",
-              execution_time_ms: apiResponse.execution_time_ms || 0,
-              timestamp: new Date().toISOString(),
-              assessment: apiResponse.assessment,
-            }}
+            apiResponse={
+              apiResponse
+                ? {
+                    status: "success",
+                    request_id: apiResponse.request_id,
+                    session_id: apiResponse.session_id || "",
+                    execution_time_ms: apiResponse.execution_time_ms || 0,
+                    timestamp: new Date().toISOString(),
+                    assessment: apiResponse.assessment,
+                  }
+                : {
+                    status: "success",
+                    request_id: "",
+                    session_id: "",
+                    execution_time_ms: 0,
+                    timestamp: new Date().toISOString(),
+                    assessment: undefined,
+                  }
+            }
+            loading={loading}
+            progress={progress}
           />
         )}
       </div>

@@ -1,0 +1,9 @@
+✓ Response from dev server:
+{
+    'response': '{"error": "Orchestrator invocation failed", "error_message": 
+"Safety-critical agent(s) failed in Phase 1: [\'regulatory\']. Manual intervention 
+required. Cannot proceed with disruption analysis. Errors: [\'An error occurred 
+(ValidationException) when calling the InvokeModel operation: 
+messages.4.content.0.tool_result.content.0.text.id: Extra inputs are not permitted\']", 
+"error_type": "RuntimeError", "request_duration_seconds": 51.706486}'
+}

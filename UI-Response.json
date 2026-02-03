@@ -1,0 +1,545 @@
+{
+    "request_id": "b3f2812c-8118-45cc-8448-6ef245e0e16b",
+    "status": "complete",
+    "created_at": "1770105456",
+    "updated_at": "1770105512",
+    "assessment": {
+        "assessment": {
+            "thread_id": "55513a42-2a22-4c80-bcff-0d5935751e85",
+            "knowledgeBaseConsidered": false,
+            "final_decision": {
+                "duration_seconds": 6.372626,
+                "phase": "arbitration",
+                "conflict_resolutions": [],
+                "safety_overrides": [],
+                "solution_options": null,
+                "reasoning": "Fallback to manual review due to arbitration failure. The system cannot provide automated recovery solutions when the arbitrator fails to generate valid options. This is a conservative safety measure to ensure human oversight when automated decision-making is not possible.",
+                "confidence": 0.0,
+                "model_used": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "error": "Arbitration failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. No valid solution options could be generated.",
+                "recommendations": [
+                    "IMMEDIATE ACTION: Manual review required by duty manager",
+                    "Verify all safety agent binding constraints are understood",
+                    "Assess if constraints are conflicting or if additional data is needed",
+                    "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
+                    "Document the reason for arbitration failure for system improvement"
+                ],
+                "conflicts_identified": [],
+                "knowledgeBaseConsidered": false,
+                "final_decision": "ARBITRATION FAILED: Unable to generate valid recovery solutions. The system could not create recovery scenarios that satisfy all constraints. Manual review by duty manager is required to assess the situation and determine appropriate action.",
+                "knowledge_base": {
+                    "knowledge_base_queried": false,
+                    "note": "Knowledge Base not enabled"
+                },
+                "justification": "Arbitration system error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. The arbitrator was unable to generate valid solution options. This may indicate conflicting binding constraints, insufficient data from agents, or a system error in the LLM generation process. No automated solutions can be provided - manual intervention is required.",
+                "recommended_solution_id": null,
+                "timestamp": "2026-02-03T07:58:32.000708+00:00"
+            },
+            "audit_trail": {
+                "phase1_initial": {
+                    "phase": "initial",
+                    "duration_seconds": 21.699889,
+                    "responses": {
+                        "crew_compliance": {
+                            "duration_seconds": 17.649221,
+                            "agent_name": "crew_compliance",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to parse flight information from natural language prompt. Error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure the prompt includes a flight number (e.g., EY123) and a date.",
+                            "extracted_flight_info": null,
+                            "recommendation": "Unable to extract flight information from prompt",
+                            "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:01.281207+00:00",
+                            "status": "error"
+                        },
+                        "guest_experience": {
+                            "duration_seconds": 21.697948,
+                            "agent_name": "guest_experience",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:05.331996",
+                            "status": "error"
+                        },
+                        "regulatory": {
+                            "duration_seconds": 19.418114,
+                            "agent_name": "regulatory",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "extracted_flight_info": null,
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:03.050767+00:00",
+                            "status": "error"
+                        },
+                        "cargo": {
+                            "duration_seconds": 9.114331,
+                            "agent_name": "cargo",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": null,
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:05.332005",
+                            "status": "error"
+                        },
+                        "maintenance": {
+                            "duration_seconds": 21.661752,
+                            "agent_name": "maintenance",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure prompt contains flight number, date, and disruption description.",
+                            "extracted_flight_info": {},
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "Extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:05.294114+00:00",
+                            "status": "error"
+                        },
+                        "finance": {
+                            "duration_seconds": 19.366503,
+                            "agent_name": "finance",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:05.332013",
+                            "status": "error"
+                        },
+                        "network": {
+                            "duration_seconds": 17.068533,
+                            "agent_name": "network",
+                            "confidence": 0.0,
+                            "reasoning": "Agent execution error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "extracted_flight_info": {},
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:00.701582+00:00",
+                            "status": "error"
+                        }
+                    },
+                    "timestamp": "2026-02-03T07:58:05.332021"
+                },
+                "user_prompt": "Flight EY123 from AUH to LHR is delayed 3 hours due to technical issues",
+                "phase2_revision": {
+                    "phase": "revision",
+                    "duration_seconds": 20.295641,
+                    "responses": {
+                        "crew_compliance": {
+                            "duration_seconds": 18.831347,
+                            "agent_name": "crew_compliance",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to parse flight information from natural language prompt. Error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure the prompt includes a flight number (e.g., EY123) and a date.",
+                            "extracted_flight_info": null,
+                            "recommendation": "Unable to extract flight information from prompt",
+                            "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:24.164153+00:00",
+                            "status": "error"
+                        },
+                        "guest_experience": {
+                            "duration_seconds": 17.92124,
+                            "agent_name": "guest_experience",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:25.628568",
+                            "status": "error"
+                        },
+                        "regulatory": {
+                            "duration_seconds": 13.434082,
+                            "agent_name": "regulatory",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "extracted_flight_info": null,
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:18.768376+00:00",
+                            "status": "error"
+                        },
+                        "cargo": {
+                            "duration_seconds": 8.969011,
+                            "agent_name": "cargo",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": null,
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:25.628577",
+                            "status": "error"
+                        },
+                        "maintenance": {
+                            "duration_seconds": 19.276339,
+                            "agent_name": "maintenance",
+                            "confidence": 0.0,
+                            "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure prompt contains flight number, date, and disruption description.",
+                            "extracted_flight_info": {},
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "Extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:24.610236+00:00",
+                            "status": "error"
+                        },
+                        "finance": {
+                            "duration_seconds": 20.29203,
+                            "agent_name": "finance",
+                            "confidence": 0.0,
+                            "reasoning": "No reasoning provided",
+                            "extracted_flight_info": null,
+                            "recommendation": "No recommendation provided",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:25.628585",
+                            "status": "error"
+                        },
+                        "network": {
+                            "duration_seconds": 19.606806,
+                            "agent_name": "network",
+                            "confidence": 0.0,
+                            "reasoning": "Agent execution error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "extracted_flight_info": {},
+                            "recommendation": "CANNOT_PROCEED",
+                            "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                            "binding_constraints": [],
+                            "data_sources": [],
+                            "timestamp": "2026-02-03T07:58:24.941449+00:00",
+                            "status": "error"
+                        }
+                    },
+                    "timestamp": "2026-02-03T07:58:25.628593"
+                },
+                "phase3_arbitration": {
+                    "duration_seconds": 6.372626,
+                    "phase": "arbitration",
+                    "conflict_resolutions": [],
+                    "safety_overrides": [],
+                    "solution_options": null,
+                    "reasoning": "Fallback to manual review due to arbitration failure. The system cannot provide automated recovery solutions when the arbitrator fails to generate valid options. This is a conservative safety measure to ensure human oversight when automated decision-making is not possible.",
+                    "confidence": 0.0,
+                    "model_used": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    "error": "Arbitration failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. No valid solution options could be generated.",
+                    "recommendations": [
+                        "IMMEDIATE ACTION: Manual review required by duty manager",
+                        "Verify all safety agent binding constraints are understood",
+                        "Assess if constraints are conflicting or if additional data is needed",
+                        "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
+                        "Document the reason for arbitration failure for system improvement"
+                    ],
+                    "conflicts_identified": [],
+                    "knowledgeBaseConsidered": false,
+                    "final_decision": "ARBITRATION FAILED: Unable to generate valid recovery solutions. The system could not create recovery scenarios that satisfy all constraints. Manual review by duty manager is required to assess the situation and determine appropriate action.",
+                    "knowledge_base": {
+                        "knowledge_base_queried": false,
+                        "note": "Knowledge Base not enabled"
+                    },
+                    "justification": "Arbitration system error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. The arbitrator was unable to generate valid solution options. This may indicate conflicting binding constraints, insufficient data from agents, or a system error in the LLM generation process. No automated solutions can be provided - manual intervention is required.",
+                    "recommended_solution_id": null,
+                    "timestamp": "2026-02-03T07:58:32.000708+00:00"
+                }
+            },
+            "total_duration_seconds": 48.370992,
+            "request_duration_seconds": 48.700191,
+            "phase1_duration_seconds": 21.699889,
+            "phase3_duration_seconds": 6.372626,
+            "status": "success",
+            "timestamp": "2026-02-03T07:58:32.002478",
+            "phase2_duration_seconds": 20.295641
+        },
+        "chunks": [
+            {
+                "thread_id": "55513a42-2a22-4c80-bcff-0d5935751e85",
+                "knowledgeBaseConsidered": false,
+                "final_decision": {
+                    "duration_seconds": 6.372626,
+                    "phase": "arbitration",
+                    "conflict_resolutions": [],
+                    "safety_overrides": [],
+                    "solution_options": null,
+                    "reasoning": "Fallback to manual review due to arbitration failure. The system cannot provide automated recovery solutions when the arbitrator fails to generate valid options. This is a conservative safety measure to ensure human oversight when automated decision-making is not possible.",
+                    "confidence": 0.0,
+                    "model_used": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    "error": "Arbitration failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. No valid solution options could be generated.",
+                    "recommendations": [
+                        "IMMEDIATE ACTION: Manual review required by duty manager",
+                        "Verify all safety agent binding constraints are understood",
+                        "Assess if constraints are conflicting or if additional data is needed",
+                        "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
+                        "Document the reason for arbitration failure for system improvement"
+                    ],
+                    "conflicts_identified": [],
+                    "knowledgeBaseConsidered": false,
+                    "final_decision": "ARBITRATION FAILED: Unable to generate valid recovery solutions. The system could not create recovery scenarios that satisfy all constraints. Manual review by duty manager is required to assess the situation and determine appropriate action.",
+                    "knowledge_base": {
+                        "knowledge_base_queried": false,
+                        "note": "Knowledge Base not enabled"
+                    },
+                    "justification": "Arbitration system error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. The arbitrator was unable to generate valid solution options. This may indicate conflicting binding constraints, insufficient data from agents, or a system error in the LLM generation process. No automated solutions can be provided - manual intervention is required.",
+                    "recommended_solution_id": null,
+                    "timestamp": "2026-02-03T07:58:32.000708+00:00"
+                },
+                "audit_trail": {
+                    "phase1_initial": {
+                        "phase": "initial",
+                        "duration_seconds": 21.699889,
+                        "responses": {
+                            "crew_compliance": {
+                                "duration_seconds": 17.649221,
+                                "agent_name": "crew_compliance",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to parse flight information from natural language prompt. Error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure the prompt includes a flight number (e.g., EY123) and a date.",
+                                "extracted_flight_info": null,
+                                "recommendation": "Unable to extract flight information from prompt",
+                                "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:01.281207+00:00",
+                                "status": "error"
+                            },
+                            "guest_experience": {
+                                "duration_seconds": 21.697948,
+                                "agent_name": "guest_experience",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:05.331996",
+                                "status": "error"
+                            },
+                            "regulatory": {
+                                "duration_seconds": 19.418114,
+                                "agent_name": "regulatory",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "extracted_flight_info": null,
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:03.050767+00:00",
+                                "status": "error"
+                            },
+                            "cargo": {
+                                "duration_seconds": 9.114331,
+                                "agent_name": "cargo",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": null,
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:05.332005",
+                                "status": "error"
+                            },
+                            "maintenance": {
+                                "duration_seconds": 21.661752,
+                                "agent_name": "maintenance",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure prompt contains flight number, date, and disruption description.",
+                                "extracted_flight_info": {},
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "Extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:05.294114+00:00",
+                                "status": "error"
+                            },
+                            "finance": {
+                                "duration_seconds": 19.366503,
+                                "agent_name": "finance",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:05.332013",
+                                "status": "error"
+                            },
+                            "network": {
+                                "duration_seconds": 17.068533,
+                                "agent_name": "network",
+                                "confidence": 0.0,
+                                "reasoning": "Agent execution error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "extracted_flight_info": {},
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:00.701582+00:00",
+                                "status": "error"
+                            }
+                        },
+                        "timestamp": "2026-02-03T07:58:05.332021"
+                    },
+                    "user_prompt": "Flight EY123 from AUH to LHR is delayed 3 hours due to technical issues",
+                    "phase2_revision": {
+                        "phase": "revision",
+                        "duration_seconds": 20.295641,
+                        "responses": {
+                            "crew_compliance": {
+                                "duration_seconds": 18.831347,
+                                "agent_name": "crew_compliance",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to parse flight information from natural language prompt. Error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure the prompt includes a flight number (e.g., EY123) and a date.",
+                                "extracted_flight_info": null,
+                                "recommendation": "Unable to extract flight information from prompt",
+                                "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:24.164153+00:00",
+                                "status": "error"
+                            },
+                            "guest_experience": {
+                                "duration_seconds": 17.92124,
+                                "agent_name": "guest_experience",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:25.628568",
+                                "status": "error"
+                            },
+                            "regulatory": {
+                                "duration_seconds": 13.434082,
+                                "agent_name": "regulatory",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "extracted_flight_info": null,
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "Flight info extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:18.768376+00:00",
+                                "status": "error"
+                            },
+                            "cargo": {
+                                "duration_seconds": 8.969011,
+                                "agent_name": "cargo",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": null,
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:25.628577",
+                                "status": "error"
+                            },
+                            "maintenance": {
+                                "duration_seconds": 19.276339,
+                                "agent_name": "maintenance",
+                                "confidence": 0.0,
+                                "reasoning": "Failed to extract flight information from prompt: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. Please ensure prompt contains flight number, date, and disruption description.",
+                                "extracted_flight_info": {},
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "Extraction failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:24.610236+00:00",
+                                "status": "error"
+                            },
+                            "finance": {
+                                "duration_seconds": 20.29203,
+                                "agent_name": "finance",
+                                "confidence": 0.0,
+                                "reasoning": "No reasoning provided",
+                                "extracted_flight_info": null,
+                                "recommendation": "No recommendation provided",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:25.628585",
+                                "status": "error"
+                            },
+                            "network": {
+                                "duration_seconds": 19.606806,
+                                "agent_name": "network",
+                                "confidence": 0.0,
+                                "reasoning": "Agent execution error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "extracted_flight_info": {},
+                                "recommendation": "CANNOT_PROCEED",
+                                "error": "An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.",
+                                "binding_constraints": [],
+                                "data_sources": [],
+                                "timestamp": "2026-02-03T07:58:24.941449+00:00",
+                                "status": "error"
+                            }
+                        },
+                        "timestamp": "2026-02-03T07:58:25.628593"
+                    },
+                    "phase3_arbitration": {
+                        "duration_seconds": 6.372626,
+                        "phase": "arbitration",
+                        "conflict_resolutions": [],
+                        "safety_overrides": [],
+                        "solution_options": null,
+                        "reasoning": "Fallback to manual review due to arbitration failure. The system cannot provide automated recovery solutions when the arbitrator fails to generate valid options. This is a conservative safety measure to ensure human oversight when automated decision-making is not possible.",
+                        "confidence": 0.0,
+                        "model_used": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                        "error": "Arbitration failed: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. No valid solution options could be generated.",
+                        "recommendations": [
+                            "IMMEDIATE ACTION: Manual review required by duty manager",
+                            "Verify all safety agent binding constraints are understood",
+                            "Assess if constraints are conflicting or if additional data is needed",
+                            "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
+                            "Document the reason for arbitration failure for system improvement"
+                        ],
+                        "conflicts_identified": [],
+                        "knowledgeBaseConsidered": false,
+                        "final_decision": "ARBITRATION FAILED: Unable to generate valid recovery solutions. The system could not create recovery scenarios that satisfy all constraints. Manual review by duty manager is required to assess the situation and determine appropriate action.",
+                        "knowledge_base": {
+                            "knowledge_base_queried": false,
+                            "note": "Knowledge Base not enabled"
+                        },
+                        "justification": "Arbitration system error: An error occurred (ThrottlingException) when calling the InvokeModel operation (reached max retries: 4): Too many tokens per day, please wait before trying again.. The arbitrator was unable to generate valid solution options. This may indicate conflicting binding constraints, insufficient data from agents, or a system error in the LLM generation process. No automated solutions can be provided - manual intervention is required.",
+                        "recommended_solution_id": null,
+                        "timestamp": "2026-02-03T07:58:32.000708+00:00"
+                    }
+                },
+                "total_duration_seconds": 48.370992,
+                "request_duration_seconds": 48.700191,
+                "phase1_duration_seconds": 21.699889,
+                "phase3_duration_seconds": 6.372626,
+                "status": "success",
+                "timestamp": "2026-02-03T07:58:32.002478",
+                "phase2_duration_seconds": 20.295641
+            }
+        ],
+        "status": "success"
+    },
+    "session_id": "b2857df0-35f2-4e6f-965b-2a25e68b6d84",
+    "execution_time_ms": "55245"
+}

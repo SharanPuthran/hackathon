@@ -409,12 +409,12 @@ class FlightInfo(BaseModel):
     extracts the flight number and disruption description.
     
     Attributes:
-        flight_number: Flight number in format EY followed by 3-4 digits
+        flight_number: Flight number in format EY followed by digits
         date: Flight date in ISO 8601 format (YYYY-MM-DD)
         disruption_event: Description of the disruption
-    
+
     Validation:
-        - flight_number: Must match pattern ^EY\d{3,4}$ (case-insensitive)
+        - flight_number: Must match pattern ^EY\d+$ (EY followed by one or more digits)
         - date: Must be valid ISO 8601 format
         - disruption_event: Cannot be empty
     
@@ -447,7 +447,7 @@ class FlightInfo(BaseModel):
 
     flight_number: str = Field(
         description=(
-            "Flight number in format EY followed by 3 or 4 digits (e.g., EY123, EY1234). "
+            "Flight number in format EY followed by digits (e.g., EY123, EY1234, EY12345). "
             "Extract the flight number from the user's natural language prompt."
         )
     )
@@ -455,10 +455,15 @@ class FlightInfo(BaseModel):
         description=(
             "Flight date in ISO 8601 format (YYYY-MM-DD). "
             "Convert any date format from the prompt to ISO format. "
+            "CRITICAL: You MUST convert relative dates to actual ISO dates. "
+            "Current date context: February 3, 2026. "
+            "- 'today' = 2026-02-03 "
+            "- 'yesterday' = 2026-02-02 "
+            "- 'tomorrow' = 2026-02-04 "
             "Supported input formats include: "
             "- Numeric: dd/mm/yyyy, dd-mm-yy, yyyy-mm-dd, mm/dd/yyyy "
             "- Named: 20 Jan, 20th January, January 20th 2026 "
-            "- Relative: yesterday, today, tomorrow "
+            "- Relative: yesterday, today, tomorrow (convert to actual dates) "
             "Assume European date format (dd/mm/yyyy) when ambiguous."
         )
     )
@@ -475,28 +480,28 @@ class FlightInfo(BaseModel):
     @classmethod
     def validate_flight_number(cls, v: str) -> str:
         """
-        Validate flight number format: EY followed by 3 or 4 digits.
-        
+        Validate flight number format: EY followed by digits.
+
         Args:
             v: Flight number string
-            
+
         Returns:
             Validated flight number in uppercase
-            
+
         Raises:
             ValueError: If flight number format is invalid
         """
         # Convert to uppercase for consistency
         v = v.upper().strip()
-        
-        # Check format: EY followed by 3 or 4 digits
-        pattern = r"^EY\d{3,4}$"
+
+        # Check format: EY followed by one or more digits
+        pattern = r"^EY\d+$"
         if not re.match(pattern, v):
             raise ValueError(
                 f"Invalid flight number format: {v}. "
-                "Expected format: EY followed by 3 or 4 digits (e.g., EY123, EY1234)"
+                "Expected format: EY followed by digits (e.g., EY123, EY1234)"
             )
-        
+
         return v
 
     @field_validator("date")

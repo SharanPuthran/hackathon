@@ -1,0 +1,16 @@
+✓ Response from dev server:
+{
+    'response': '{"error": "Orchestrator invocation failed", "error_message": 
+"Safety-critical agent(s) failed in Phase 1: [\'crew_compliance\', \'maintenance\', 
+\'regulatory\']. Manual intervention required. Cannot proceed with disruption analysis. 
+Errors: [\\"Validation error: 1 validation error for FlightInfo\\\\nflight_number\\\\n  
+Value error, Invalid flight number format: SK202. Expected format: EY followed by 3 or 4 
+digits (e.g., EY123, EY1234) [type=value_error, input_value=\'SK202\', 
+input_type=str]\\\\n    For further information visit 
+https://errors.pydantic.dev/2.12/v/value_error\\", \\"Extraction failed: 1 validation 
+error for FlightInfo\\\\nflight_number\\\\n  Value error, Invalid flight number format: 
+SK202. Expected format: EY followed by 3 or 4 digits (e.g., EY123, EY1234) 
+[type=value_error, input_value=\'SK202\', input_type=str]\\\\n    For further information 
+visit https://errors.pydantic.dev/2.12/v/value_error\\", None]", "error_type": 
+"RuntimeError", "request_duration_seconds": 27.773635}'
+}

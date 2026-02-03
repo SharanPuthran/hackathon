@@ -9,6 +9,8 @@ import { ResponseMapper } from "../services/responseMapper";
 interface OrchestrationViewProps {
   prompt: string;
   apiResponse: InvokeResponse;
+  loading?: boolean;
+  progress?: string;
 }
 
 const AGENT_ROSTER: Exclude<AgentType, "Arbitrator">[] = [
@@ -111,6 +113,8 @@ type Stage =
 export default function OrchestrationView({
   prompt,
   apiResponse,
+  loading = false,
+  progress = "",
 }: OrchestrationViewProps) {
   const [stage, setStage] = useState<Stage>("summoning");
   const [messages, setMessages] = useState<MessageData[]>([]);
@@ -132,9 +136,50 @@ export default function OrchestrationView({
     }
   }, [messages, activeAgent, thinkingAgent]);
 
+  // Display phase1 messages with sequential animation
+  const displayPhase1Messages = async (messages: MessageData[]) => {
+    for (const message of messages) {
+      setThinkingAgent(message.agent);
+      await new Promise((r) => setTimeout(r, 800)); // Thinking indicator for 800ms
+      setThinkingAgent(null);
+      setActiveAgent(message.agent);
+
+      setMessages((prev) => [...prev, message]);
+
+      await new Promise((r) => setTimeout(r, 1000)); // Speaking duration 1000ms
+      setActiveAgent(null);
+    }
+
+    // Update arbitrator analysis after all phase1 messages
+    setArbitratorAnalysis(
+      "Initial impact assessment complete. Analysis ready for review.",
+    );
+    setStage("waiting_for_user");
+  };
+
+  // Display phase2 messages with sequential animation
+  const displayPhase2Messages = async (messages: MessageData[]) => {
+    for (const message of messages) {
+      setThinkingAgent(message.agent);
+      await new Promise((r) => setTimeout(r, 800)); // Thinking indicator for 800ms
+      setThinkingAgent(null);
+      setActiveAgent(message.agent);
+
+      setMessages((prev) => [...prev, message]);
+
+      await new Promise((r) => setTimeout(r, 1000)); // Speaking duration 1000ms
+      setActiveAgent(null);
+    }
+  };
+
   // Parse API response and display agent messages
   useEffect(() => {
     const displayApiResponse = async () => {
+      // Don't process if still loading or no assessment
+      if (loading || !apiResponse.assessment) {
+        return;
+      }
+
       // 1. Summoning stage
       setArbitratorAnalysis("Initializing swarm intelligence...");
       await new Promise((r) => setTimeout(r, 2000));
@@ -144,30 +189,61 @@ export default function OrchestrationView({
       );
       setStage("initial_round");
 
-      // 2. Parse API response
+      // 2. Check for API errors first
       if (apiResponse.assessment) {
-        const parsed = ResponseMapper.parseResponse(apiResponse.assessment);
+        const assessment = apiResponse.assessment as any;
 
-        // Display messages one by one with animation
-        for (const message of parsed.messages) {
-          setThinkingAgent(message.agent);
-          await new Promise((r) => setTimeout(r, 800)); // Thinking
-          setThinkingAgent(null);
-          setActiveAgent(message.agent);
+        // Handle nested assessment structure (assessment.assessment)
+        const actualAssessment = assessment.assessment || assessment;
 
-          setMessages((prev) => [...prev, message]);
+        // Check if the assessment contains an error
+        if (actualAssessment.error || actualAssessment.error_message) {
+          const errorMsg =
+            actualAssessment.error_message ||
+            actualAssessment.error ||
+            "Unknown error occurred";
+          const errorType = actualAssessment.error_type || "API Error";
 
-          await new Promise((r) => setTimeout(r, 1000)); // Speaking duration
-          setActiveAgent(null);
+          setArbitratorAnalysis(
+            `⚠️ ${errorType}: ${errorMsg}. Please check the backend logs for details.`,
+          );
+          setStage("waiting_for_user");
+
+          // Display error message in the chat
+          setMessages([
+            {
+              id: `error-${Date.now()}`,
+              agent: "Arbitrator",
+              recommendation: "System Error",
+              reasoning: errorMsg,
+              status: "error",
+            },
+          ]);
+          return;
         }
 
-        // Set solutions
-        setSolutions(parsed.solutions);
+        // 3. Parse API response with audit_trail structure
+        if (actualAssessment.audit_trail) {
+          // NEW: Parse three-phase audit trail structure
+          const parsed = ResponseMapper.parseAuditTrail(
+            actualAssessment.audit_trail,
+          );
 
-        setArbitratorAnalysis(
-          "Initial impact assessment complete. Analysis ready for review.",
-        );
-        setStage("waiting_for_user");
+          // Display phase1 messages using dedicated function
+          await displayPhase1Messages(parsed.phase1Messages);
+
+          // Set solutions from phase3
+          setSolutions(parsed.solutions);
+        } else {
+          // Fallback to old structure for backward compatibility
+          const parsed = ResponseMapper.parseResponse(apiResponse.assessment);
+
+          // Display messages using phase1 function
+          await displayPhase1Messages(parsed.messages);
+
+          // Set solutions
+          setSolutions(parsed.solutions);
+        }
       } else {
         // Handle case where assessment is missing
         setArbitratorAnalysis("Warning: No assessment data received from API.");
@@ -178,7 +254,7 @@ export default function OrchestrationView({
     if (stage === "summoning") {
       displayApiResponse();
     }
-  }, [stage, apiResponse]);
+  }, [stage, apiResponse, loading]);
 
   /* ============================================================================
    * MOCK ORCHESTRATION SEQUENCE - COMMENTED OUT FOR API INTEGRATION
@@ -232,68 +308,67 @@ export default function OrchestrationView({
 
   const handleCrossImpact = async () => {
     setStage("cross_impact");
-    setArbitratorAnalysis(
-      "Initiating cross-impact analysis with session context...",
-    );
+    setArbitratorAnalysis("Analyzing cross-impact between agents...");
 
-    try {
-      // Import API service dynamically to avoid circular dependencies
-      const { APIService } = await import("../services/api");
-      const { getConfig } = await import("../config/env");
-      const { ResponseMapper } = await import("../services/responseMapper");
+    // Use the phase2 data that's already in the apiResponse
+    if (apiResponse.assessment) {
+      const assessment = apiResponse.assessment as any;
+      const actualAssessment = assessment.assessment || assessment;
 
-      const config = getConfig();
-      const apiService = new APIService({
-        endpoint: config.apiEndpoint,
-        region: config.awsRegion,
-        timeout: config.apiTimeout,
-      });
+      console.log("=== Cross Impact Analysis Debug ===");
+      console.log("actualAssessment:", actualAssessment);
+      console.log("audit_trail exists:", !!actualAssessment.audit_trail);
 
-      // Make cross-impact API call with session_id
-      const response = await apiService.invoke({
-        prompt: "Perform cross-impact analysis",
-        session_id: apiResponse.session_id,
-      });
+      if (actualAssessment.audit_trail) {
+        // Parse phase2_revision from the existing audit trail
+        const parsed = ResponseMapper.parseAuditTrail(
+          actualAssessment.audit_trail,
+        );
 
-      // Parse and display cross-impact responses
-      if (response.assessment) {
-        const parsed = ResponseMapper.parseResponse(response.assessment);
+        console.log(
+          "Parsed phase2Messages count:",
+          parsed.phase2Messages.length,
+        );
+        console.log("Parsed solutions count:", parsed.solutions.length);
+        console.log("Phase2 messages:", parsed.phase2Messages);
 
-        // Display cross-impact messages one by one
-        for (const message of parsed.messages) {
-          setThinkingAgent(message.agent);
-          await new Promise((r) => setTimeout(r, 800));
-          setThinkingAgent(null);
-          setActiveAgent(message.agent);
-
-          // Mark as cross-impact round
-          setMessages((prev) => [
-            ...prev,
-            {
-              ...message,
-              isCrossImpactRound: true,
-            },
-          ]);
-
-          await new Promise((r) => setTimeout(r, 1000));
-          setActiveAgent(null);
+        // Display phase2 messages using dedicated function
+        if (parsed.phase2Messages.length > 0) {
+          await displayPhase2Messages(parsed.phase2Messages);
+        } else {
+          console.warn("No phase2 messages to display");
         }
 
-        // Update solutions if new ones are provided
+        // Update solutions from phase3 (arbitration)
         if (parsed.solutions.length > 0) {
           setSolutions(parsed.solutions);
+          setArbitratorAnalysis(
+            "Cross-impact analysis complete. Review the recommended solutions below.",
+          );
+        } else {
+          // Check if there's an arbitration error
+          const phase3 = actualAssessment.audit_trail.phase3_arbitration;
+          if (phase3 && phase3.error) {
+            setArbitratorAnalysis(
+              `⚠️ Arbitration Error: ${phase3.error}. ${phase3.final_decision || "Manual review required."}`,
+            );
+          } else {
+            setArbitratorAnalysis(
+              "Cross-impact analysis complete. No solution options available.",
+            );
+          }
         }
-      }
 
-      setStage("decision_phase");
-      setArbitratorAnalysis(
-        "Cross-impact analysis complete. Review the recommended solutions below.",
-      );
-    } catch (error) {
-      console.error("Cross-impact analysis failed:", error);
-      setArbitratorAnalysis(
-        "Cross-impact analysis encountered an error. Proceeding with initial assessment.",
-      );
+        setStage("decision_phase");
+      } else {
+        // Fallback if no audit_trail
+        console.error("No audit_trail found in assessment");
+        setArbitratorAnalysis("Cross-impact data not available in response.");
+        setStage("decision_phase");
+      }
+    } else {
+      console.error("No assessment found in apiResponse");
+      setArbitratorAnalysis("Cross-impact analysis data not available.");
       setStage("decision_phase");
     }
   };
@@ -396,20 +471,38 @@ export default function OrchestrationView({
           </div>
         </div>
 
-        {/* Action Bar (Floating at bottom of left panel) */}
-        {stage === "waiting_for_user" && (
-          <div className="absolute bottom-8 left-0 right-0 flex justify-center z-20">
-            <button
-              onClick={handleCrossImpact}
-              className="group flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-full shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all duration-300 ring-4 ring-white/50">
-              <BrainCircuit size={20} className="text-sky-400" />
-              <span className="font-semibold text-lg">
-                Run Cross-Impact Analysis
-              </span>
-              <ChevronRight className="group-hover:translate-x-1 transition-transform" />
-            </button>
-          </div>
-        )}
+        {/* Status Updates and Action Bar (Floating at bottom of left panel) */}
+        <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent pt-8 pb-6">
+          {/* Loading Indicator with Status */}
+          {loading && progress && (
+            <div className="flex flex-col items-center gap-3 mb-4 px-6">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 bg-sky-500 rounded-full animate-pulse"></div>
+                <span className="text-sm text-slate-600 font-medium">
+                  {progress}
+                </span>
+              </div>
+              <div className="w-64 h-1 bg-slate-200 rounded-full overflow-hidden">
+                <div className="h-full bg-sky-500 rounded-full animate-pulse w-1/2"></div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Button */}
+          {stage === "waiting_for_user" && !loading && (
+            <div className="flex justify-center">
+              <button
+                onClick={handleCrossImpact}
+                className="group flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-full shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all duration-300 ring-4 ring-white/50">
+                <BrainCircuit size={20} className="text-sky-400" />
+                <span className="font-semibold text-lg">
+                  Run Cross-Impact Analysis
+                </span>
+                <ChevronRight className="group-hover:translate-x-1 transition-transform" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* --- Right Side: Arbitrator Panel (25% or fixed width) --- */}

@@ -24,66 +24,66 @@ MAX_DEBATE_ROUNDS = int(os.getenv('MAX_DEBATE_ROUNDS', 3))
 SAFETY_TIMEOUT_SECONDS = int(os.getenv('SAFETY_TIMEOUT_SECONDS', 60))
 
 # Model Configuration - All via AWS Bedrock
-# Using Amazon Nova Premier (currently accessible)
-# NOTE: Claude models require use case form submission at: https://pages.awscloud.com/GLOBAL-ln-GC-Bedrock-3pmodel-interest-form-2024.html
+# Using GLOBAL cross-region inference profiles (CRIS) for better availability and reduced throttling
+# Global endpoints distribute load across multiple regions automatically
 AGENT_MODEL_MAP = {
     # Core orchestration - Fast and efficient
     "orchestrator": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "provider": "bedrock",
-        "reason": "Fast workflow coordination with excellent state management"
+        "reason": "Global CRIS - Fast workflow coordination with excellent state management"
     },
 
     # Arbitrator - Strongest available reasoning model
     "arbitrator": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "provider": "bedrock",
-        "reason": "Most powerful reasoning for complex multi-criteria optimization and scenario ranking"
+        "reason": "Global CRIS - Most powerful reasoning for complex multi-criteria optimization"
     },
 
-    # Safety Agents (critical - using Nova Premier for all reasoning tasks)
+    # Safety Agents (critical - using Claude Sonnet 4.5 Global for all reasoning tasks)
     "crew_compliance_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "provider": "bedrock",
-        "reason": "Chain-of-thought reasoning for FTL regulations and safety compliance"
+        "reason": "Global CRIS - Chain-of-thought reasoning for FTL regulations and safety compliance"
     },
     "maintenance_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "provider": "bedrock",
-        "reason": "Technical reasoning for MEL/AOG analysis with high accuracy"
+        "reason": "Global CRIS - Technical reasoning for MEL/AOG analysis with high accuracy"
     },
     "regulatory_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "provider": "bedrock",
-        "reason": "Regulatory compliance analysis with detailed reasoning"
+        "reason": "Global CRIS - Regulatory compliance analysis with detailed reasoning"
     },
 
-    # Business Agents (fast models for quick impact assessment and proposals)
+    # Business Agents (using Claude Haiku 4.5 Global for fast impact assessment)
     "network_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "provider": "bedrock",
-        "reason": "Fast network propagation analysis with excellent reasoning"
+        "reason": "Global CRIS - Fast network propagation analysis"
     },
     "guest_experience_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "provider": "bedrock",
-        "reason": "Excellent customer sentiment and empathy analysis"
+        "reason": "Global CRIS - Excellent customer sentiment and empathy analysis"
     },
     "cargo_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "provider": "bedrock",
-        "reason": "Fast logistics optimization with strong reasoning"
+        "reason": "Global CRIS - Fast logistics optimization"
     },
     "finance_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "provider": "bedrock",
-        "reason": "Cost-effective financial modeling with strong numerical reasoning"
+        "reason": "Global CRIS - Cost-effective financial modeling"
     },
 
     # Execution Agents - Fast and reliable
     "execution_agent": {
-        "model_id": "us.amazon.nova-premier-v1:0",
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "provider": "bedrock",
-        "reason": "Reliable execution coordination with fast response times"
+        "reason": "Global CRIS - Reliable execution coordination with fast response times"
     }
 }

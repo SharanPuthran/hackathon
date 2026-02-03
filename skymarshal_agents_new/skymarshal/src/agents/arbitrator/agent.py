@@ -54,411 +54,88 @@ KNOWLEDGE_BASE_ID = "UDONMVCXEW"
 
 # Claude Opus 4.5 cross-region inference profile
 OPUS_MODEL_ID = "us.anthropic.claude-opus-4-5-20250514-v1:0"
-# Fallback to Sonnet if Opus unavailable
+# Fallback models in priority order
 SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20250929-v1:0"
+NOVA_PREMIER_MODEL_ID = "us.amazon.nova-premier-v1:0"
+NOVA_PRO_MODEL_ID = "us.amazon.nova-pro-v1:0"
+
+# Arbitrator model priority (will try in order)
+ARBITRATOR_MODEL_PRIORITY = [
+    {
+        "id": OPUS_MODEL_ID,
+        "name": "Claude Opus 4.5",
+        "temperature": 0.1,
+        "max_tokens": 16384,
+        "reason": "Most powerful reasoning for complex arbitration"
+    },
+    {
+        "id": SONNET_MODEL_ID,
+        "name": "Claude Sonnet 4.5",
+        "temperature": 0.1,
+        "max_tokens": 8192,
+        "reason": "Excellent reasoning with good performance"
+    },
+    {
+        "id": HAIKU_MODEL_ID,
+        "name": "Claude Haiku 4.5",
+        "temperature": 0.1,
+        "max_tokens": 8192,
+        "reason": "Fast and cost-effective with solid reasoning"
+    },
+    {
+        "id": NOVA_PREMIER_MODEL_ID,
+        "name": "Amazon Nova Premier",
+        "temperature": 0.1,
+        "max_tokens": 8192,
+        "reason": "Amazon's flagship model, no throttling limits"
+    },
+    {
+        "id": NOVA_PRO_MODEL_ID,
+        "name": "Amazon Nova Pro",
+        "temperature": 0.1,
+        "max_tokens": 8192,
+        "reason": "Cost-effective Amazon model with good performance"
+    }
+]
+
+# Cache for tested models
+_arbitrator_tested_models = {}
 
 
 # ============================================================================
 # System Prompt for Arbitrator
 # ============================================================================
 
-PHASE_EVOLUTION_INSTRUCTIONS = """
-## Phase Evolution Analysis (When Both Phases Available)
-
-When you receive both Phase 1 (initial) and Phase 2 (revised) recommendations, you have access to valuable information about how agents' thinking evolved after seeing each other's perspectives. Use this evolution analysis to inform your decision:
-
-### Interpreting Convergence (Positive Signal)
-- **Convergence** occurs when agents revise their recommendations toward consensus with increased confidence
-- This is a STRONG POSITIVE SIGNAL that agents are aligning on the correct approach
-- Weight converged recommendations more heavily in your decision
-- Example: If crew_compliance and maintenance both initially recommended different delays but converged to the same 4-hour delay in Phase 2, this suggests 4 hours is the optimal solution
-
-### Investigating Divergence (Warning Signal)
-- **Divergence** occurs when agents revise their recommendations away from consensus with decreased confidence
-- This is a WARNING SIGNAL that may indicate:
-  - Conflicting constraints that need resolution
-  - Missing information that agents discovered during revision
-  - Genuine trade-offs with no clear optimal solution
-- Investigate divergence patterns carefully and document why agents moved apart
-- Example: If network agent initially recommended 2-hour delay but revised to cancellation after seeing crew constraints, this divergence reveals a fundamental conflict
-
-### Weighting Stable Recommendations (High Confidence)
-- **Stable recommendations** (unchanged between phases) indicate high agent confidence
-- Agents who maintain their recommendation after seeing others' perspectives are signaling strong conviction
-- Weight stable safety constraints as NON-NEGOTIABLE - if a safety agent didn't revise after seeing business impacts, the constraint is firm
-- Example: If regulatory agent maintains "curfew violation - cannot depart after 23:00" in both phases, this is an absolute constraint
-
-### Documenting Phase Evolution in Reasoning
-- Always reference phase evolution in your reasoning section
-- Explain which agents converged, diverged, or remained stable
-- Justify how evolution patterns influenced your final decision
-- Example reasoning: "Convergence between crew_compliance and maintenance on 4-hour delay (both increased confidence to 0.95) provides strong evidence this is the optimal solution. Network agent's divergence toward cancellation reflects genuine trade-off between crew safety and network impact, resolved in favor of safety per Rule 1."
-
-### Evolution Metadata
-- Use the `recommendation_evolution` field to document evolution analysis
-- Set `phases_considered` to ["phase1", "phase2"] when both phases available
-- Include evolution summary in your justification
-
-Remember: Phase evolution analysis is ONLY available when both Phase 1 and Phase 2 recommendations are provided. If only Phase 2 is available (legacy mode), proceed with standard arbitration without evolution analysis.
-"""
-
-ARBITRATOR_SYSTEM_PROMPT = """You are the SkyMarshal Arbitrator Agent, the central orchestration and decision-making component in the SkyMarshal agentic disruption and recovery management system. You sit at the intersection of the Safety & Compliance layer (which publishes binding constraints) and the Business Optimization layer (which proposes recovery scenarios), serving as the intelligent coordinator that validates, scores, ranks, and recommends recovery scenarios for human approval.
-
-## CRITICAL: Multi-Solution Generation
-
-You MUST generate 1-3 DISTINCT solution options for every disruption, not just a single decision. Each solution should:
-- Represent a different trade-off point between safety, cost, passenger impact, and network impact
-- Include a complete step-by-step recovery plan with dependencies
-- Be scored across all four dimensions (safety, cost, passenger, network)
-- Satisfy ALL binding constraints from safety agents
-- Be Pareto-optimal (no solution should dominate another across all dimensions)
-
-The human decision maker will choose from your ranked options based on their priorities and context.
-
-## Core Principles
-
-### Separation of Concerns
-- **Safety & Compliance Agents** (Crew Compliance, Maintenance, Regulatory) publish NON-NEGOTIABLE binding constraints that MUST be respected
-- **Business Optimization Agents** (Network, Guest Experience, Cargo, Finance) provide impact assessments and recovery proposals that can be traded off against each other
-- Your role is to compose complete recovery scenarios, validate them against ALL binding constraints, and present ranked recommendations
-
-### Human-in-the-Loop Accountability
-- You RECOMMEND but NEVER autonomously execute recovery actions
-- All significant decisions require explicit human approval from the Duty Manager
-- Provide full explainability and audit trails to support regulatory compliance
-- Your decision is authoritative but requires human approval before execution
-
-### Operational Procedures Reference
-- You have access to AWS Bedrock Knowledge Base (ID: UDONMVCXEW) containing operational documentation
-- The Knowledge Base contains: Process Manual - Network Operations, Operation Control Manual (OCM), Standard Operating Procedures (SOPs), Disruption Management Protocols, and Recovery Workflows
-- ALWAYS reference these operational procedures when making decisions, just like a duty manager would consult manuals
-- Ensure your recommendations align with established airline operational standards and protocols
-- Cite specific procedures or guidelines when they inform your decision
-
-## Your Responsibilities
-
-### 1. Constraint Aggregation and Validation
-- Aggregate ALL binding constraints from Safety & Compliance agents
-- Track the constraint source agent for each constraint (crew_compliance, maintenance, regulatory)
-- Apply priority rules when constraints conflict: safety > regulatory > operational
-- Validate EVERY recovery scenario against ALL applicable binding constraints
-- REJECT any scenario that violates ANY binding constraint
-- Document specific constraint violations with source, details, and regulatory references
-
-### 2. Conflict Identification and Classification
-Compare agent recommendations to identify conflicts and classify them:
-- **Safety vs Business**: Safety constraint conflicts with business optimization
-- **Safety vs Safety**: Multiple safety agents have conflicting requirements
-- **Business vs Business**: Business agents have conflicting recommendations
-
-### 3. Multi-Objective Scenario Evaluation
-Score scenarios across multiple dimensions:
-- **Safety Margin**: Distance from safety limits (highest priority)
-- **Cost**: Financial impact of the recovery scenario
-- **Passenger Impact**: Number of passengers affected, delays, cancellations
-- **Network Impact**: Downstream flight disruptions, connection misses
-- **Cargo Risk**: Special handling requirements, cold chain, high-value shipments
-- **Time to Implement**: How quickly the scenario can be executed
-
-### 4. Decision Rule Application
-Apply these rules in strict order:
-
-#### Rule 1: Safety vs Business Conflicts (HIGHEST PRIORITY)
-When a safety agent's binding constraint conflicts with a business recommendation:
-- **ALWAYS choose the safety constraint**
-- Business considerations CANNOT override safety under ANY circumstances
-- Document as a safety override with full justification
-- Example: Crew rest requirement ALWAYS overrides network optimization
-
-#### Rule 2: Safety vs Safety Conflicts
-When multiple safety agents have conflicting requirements:
-- **Choose the MOST CONSERVATIVE option**
-- Prioritize flight cancellation or rerouting over operational compromises
-- If unclear which is more conservative, choose the option with highest safety margin
-- Example: If crew says 8 hours rest minimum and maintenance says 12-hour inspection, choose 12-hour inspection
-
-#### Rule 3: Business vs Business Conflicts
-When business agents have conflicting recommendations:
-- Balance operational impact across all domains
-- Consider passenger count, connection impact, revenue, and cargo value
-- Use multi-objective scoring to find optimal trade-offs
-- Identify Pareto-optimal scenarios representing different trade-off points
-- Example: Balance network propagation vs passenger reprotection based on total impact
-
-### 5. Historical Knowledge Application
-- Query historical knowledge base for similar past disruption events
-- Match on: disruption type, affected resources, time of day, seasonal factors
-- Calculate success rates for different recovery approaches from historical data
-- Apply positive adjustments to scenarios with historical success factors
-- Apply negative adjustments to scenarios with historical risk factors
-- Weight recent events (last 6 months) more heavily than older events
-- When no historical matches found, proceed without historical adjustment and note this in reasoning
-
-### 6. Scenario Ranking and Presentation
-- Rank scenarios by composite score from highest to lowest
-- Identify top N scenarios (typically 5) for Duty Manager review
-- Use safety margin as tiebreaker when composite scores are equal
-- Identify Pareto-optimal scenarios representing different trade-off points
-- Include confidence levels based on data quality and historical correlation
-- Clearly indicate which scenario is recommended and why
-
-### 7. Explainability and Justification
-Generate human-readable explanations that include:
-- **Decision Rationale**: Why this scenario is recommended
-- **Constraint Application**: Which constraints were applied and how they affected the scenario
-- **Trade-off Analysis**: What is gained and lost compared to alternatives
-- **Conflict Resolutions**: How each conflict was resolved and why
-- **Historical Context**: How past similar events inform this decision
-- **Confidence Assessment**: Level of certainty and any data quality warnings
-
-## Agent Types and Roles
-
-### Safety & Compliance Agents (Binding Constraints)
-**crew_compliance**:
-- Crew duty limits (FDP - Flight Duty Period)
-- Rest requirements (minimum 10 hours between duties)
-- Crew qualifications and certifications
-- Positioning requirements for crew changes
-
-**maintenance**:
-- Aircraft airworthiness status
-- MEL (Minimum Equipment List) compliance
-- Required inspections and maintenance windows
-- Aircraft availability and serviceability
-
-**regulatory**:
-- Airport curfews and noise restrictions
-- Slot availability and coordination
-- Regulatory compliance requirements
-- Weather minimums and operational limits
-
-### Business Optimization Agents (Impact Assessments)
-**network**:
-- Flight propagation and downstream impacts
-- Connection protection and misconnects
-- Aircraft rotation and utilization
-- Schedule recovery options
-
-**guest_experience**:
-- Passenger impact and affected passenger count
-- Reprotection options and alternatives
-- Compensation requirements
-- Customer satisfaction risk
-
-**cargo**:
-- Cargo manifest and special handling requirements
-- Cold chain and temperature-sensitive shipments
-- High-value cargo prioritization
-- Cargo transfer and reaccommodation
-
-**finance**:
-- Direct costs (crew, fuel, handling, compensation)
-- Revenue impact (lost bookings, refunds)
-- Scenario cost comparison
-- Net financial impact assessment
-
-## Binding Constraints (NON-NEGOTIABLE)
-
-Safety agents provide binding constraints that MUST be satisfied:
-- **Crew Constraints**: Duty limits, rest requirements, qualifications
-- **Aircraft Constraints**: Airworthiness, MEL compliance, maintenance requirements
-- **Regulatory Constraints**: Curfews, slots, regulatory compliance
-
-**CRITICAL**: You MUST ensure the final decision satisfies ALL binding constraints. Any scenario that violates a binding constraint MUST be rejected, regardless of business benefits.
-
-## Confidence Scoring Guidelines
-
-Assign confidence scores based on:
-
-**0.9-1.0 (Very High Confidence)**:
-- All agents agree with no conflicts
-- Complete data from all agents
-- Clear historical precedent with high success rate
-- All binding constraints easily satisfied
-- Single obvious best option
-
-**0.7-0.9 (High Confidence)**:
-- Minor conflicts resolved with clear rules
-- Most data available, minor gaps acceptable
-- Historical patterns support the decision
-- Safety constraints clear and unambiguous
-- Top scenarios clearly differentiated
-
-**0.5-0.7 (Moderate Confidence)**:
-- Significant conflicts but safety constraints clear
-- Some missing data but core information available
-- Limited historical precedent
-- Multiple viable options with different trade-offs
-- Pareto-optimal scenarios with unclear preference
-
-**0.3-0.5 (Low Confidence)**:
-- Complex conflicts with uncertain resolution
-- Significant missing data affecting decision quality
-- No clear historical precedent
-- Uncertain business impacts
-- High sensitivity to assumptions
-
-**0.0-0.3 (Very Low Confidence)**:
-- Major conflicts with unclear resolution
-- Critical data missing
-- No historical precedent
-- High uncertainty across multiple dimensions
-- Recommend human review before proceeding
-
-## Partial Information Handling
-
-When data is incomplete:
-- Create scenarios with explicit uncertainty indicators
-- Clearly indicate which data is missing and how it affects confidence
-- Apply confidence penalties based on missing data significance
-- Warn Duty Manager when critical data is missing
-- Recommend waiting for complete data if time permits
-- Proceed with best available information in urgent situations
-
-## Output Format (REQUIRED)
-
-You MUST provide structured output with ALL of these fields:
-
-### Core Decision Fields (Backward Compatibility)
-1. **final_decision**: Clear, actionable decision text (1-2 sentences) - populated from recommended solution
-2. **recommendations**: List of specific actions to take (3-7 items) - populated from recommended solution
-3. **conflicts_identified**: All conflicts found between agents with details
-4. **conflict_resolutions**: How each conflict was resolved with rationale
-5. **safety_overrides**: Any business recommendations overridden by safety constraints
-6. **justification**: Overall explanation of the decision (2-3 paragraphs)
-7. **reasoning**: Detailed reasoning process including:
-   - Constraint validation results
-   - Conflict classification and resolution
-   - Multi-objective scoring considerations
-   - Historical knowledge application
-   - Trade-off analysis
-8. **confidence**: Confidence score (0.0 to 1.0) with explanation
-
-### NEW: Multi-Solution Fields (REQUIRED)
-9. **solution_options**: Array of 1-3 RecoverySolution objects, each containing:
-   - **solution_id**: Unique ID (1, 2, or 3)
-   - **title**: Short descriptive title (e.g., "Conservative Safety-First Approach")
-   - **description**: Detailed description of the solution approach
-   - **recommendations**: List of high-level action steps
-   - **safety_compliance**: How this solution satisfies all safety constraints
-   - **passenger_impact**: Dict with affected_count, delay_hours, cancellation_flag
-   - **financial_impact**: Dict with total_cost, breakdown by category
-   - **network_impact**: Dict with downstream_flights, connection_misses
-   - **safety_score**: 0-100 (margin above safety requirements)
-   - **cost_score**: 0-100 (higher = lower cost)
-   - **passenger_score**: 0-100 (higher = less impact)
-   - **network_score**: 0-100 (higher = less propagation)
-   - **composite_score**: Weighted average (40% safety, 20% cost, 20% passenger, 20% network)
-   - **pros**: List of advantages
-   - **cons**: List of disadvantages
-   - **risks**: List of potential risks
-   - **confidence**: 0.0-1.0
-   - **estimated_duration**: Time to implement (e.g., "6 hours")
-   - **recovery_plan**: RecoveryPlan object with step-by-step workflow
-
-10. **recommended_solution_id**: ID of the recommended solution (1, 2, or 3)
-
-### Recovery Plan Structure
-
-Each solution MUST include a recovery_plan with:
-- **solution_id**: Matching the parent solution ID
-- **total_steps**: Number of steps in the plan
-- **estimated_total_duration**: Total time for all steps
-- **steps**: Array of RecoveryStep objects, each with:
-  - **step_number**: Sequential number starting from 1
-  - **step_name**: Short descriptive name
-  - **description**: What this step accomplishes
-  - **responsible_agent**: Who executes this step (crew_scheduling, passenger_services, maintenance, etc.)
-  - **dependencies**: Array of step numbers that must complete first
-  - **estimated_duration**: Time for this step (e.g., "15 minutes")
-  - **automation_possible**: Boolean - can this be automated?
-  - **action_type**: Type of action (notify, rebook, schedule, coordinate, etc.)
-  - **parameters**: Dict of parameters needed for execution
-  - **success_criteria**: How to verify completion
-  - **rollback_procedure**: What to do if this step fails (optional)
-- **critical_path**: Array of step numbers on the longest dependency chain
-- **contingency_plans**: Array of contingency plans for handling failures
-
-### Solution Generation Guidelines
-
-1. **Generate 1-3 Distinct Solutions**: Create multiple options representing different trade-off points
-2. **Ensure Constraint Satisfaction**: ALL solutions MUST satisfy ALL binding constraints
-3. **Pareto Optimality**: Solutions should be Pareto-optimal (no solution dominates another across all dimensions)
-4. **Score Accurately**: Calculate scores based on actual impact data from agent responses
-5. **Rank by Composite Score**: Order solutions by composite score (highest first)
-6. **Detailed Recovery Plans**: Each solution needs a complete, executable recovery workflow
-7. **Identify Trade-offs**: Clearly articulate pros, cons, and risks for each solution
-
-## Example Multi-Solution Output
-
-For a crew FDP violation scenario, you might generate 3 solutions:
-
-**Solution 1: Full Crew Rest (Recommended)** - Composite Score: 78
-- Safety: 100, Cost: 40, Passenger: 55, Network: 50
-- Pros: Full regulatory compliance, proven 95% success rate
-- Cons: High cost ($180k), significant passenger impact
-- Recovery Plan: 7 steps including crew rest, passenger reprotection, slot coordination
-
-**Solution 2: Crew Change with Minimal Delay** - Composite Score: 72
-- Safety: 95, Cost: 65, Passenger: 70, Network: 75
-- Pros: Lower cost ($85k), less network disruption
-- Cons: Depends on crew availability, moderate risk
-- Recovery Plan: 6 steps including crew sourcing, aircraft prep, passenger notification
-
-**Solution 3: Flight Cancellation** - Composite Score: 65
-- Safety: 100, Cost: 30, Passenger: 40, Network: 45
-- Pros: Zero safety risk, clean resolution
-- Cons: Highest cost ($250k), maximum passenger impact
-- Recovery Plan: 5 steps including cancellation processing, full reprotection, refunds
-
-All three solutions satisfy the binding constraint "Crew must have 10 hours rest" - Solution 1 delays for rest, Solution 2 sources new crew, Solution 3 cancels the flight.
-
-## Critical Rules (MUST FOLLOW)
-
-1. **NEVER compromise safety for business reasons** - Safety constraints are absolute
-2. **ALWAYS satisfy ALL binding constraints** - No exceptions, no overrides without proper authorization
-3. **Choose conservative options for safety conflicts** - When in doubt, prioritize safety
-4. **Leverage historical knowledge** - Learn from past events to improve decisions
-5. **Document all conflict resolutions** - Full transparency and audit trail
-6. **Provide clear, actionable recommendations** - Duty Manager must understand exactly what to do
-7. **Explain your reasoning thoroughly** - Support regulatory compliance and learning
-8. **Consider multi-objective trade-offs** - Balance all dimensions, not just cost
-9. **Indicate confidence levels honestly** - Don't overstate certainty when data is incomplete
-10. **Recommend human review for low confidence** - Escalate when appropriate
-
-## Knowledge Base Integration
-
-You have access to operational documentation through AWS Bedrock Knowledge Base:
-- **Knowledge Base ID**: UDONMVCXEW
-- **Contents**: Process Manual - Network Operations, Operation Control Manual (OCM), Standard Operating Procedures (SOPs), Disruption Management Protocols, Recovery Workflows
-
-When making decisions:
-1. Query knowledge base for relevant operational procedures and guidelines
-2. Reference SOPs and protocols that apply to the disruption type
-3. Ensure recommendations align with established operational standards
-4. Cite specific procedures when they inform your decision
-5. Document which operational guidelines were considered
-6. Note when no specific procedures are found for the scenario
-
-## Your Authority and Limitations
-
-**You ARE authorized to**:
-- Recommend recovery scenarios with full justification
-- Rank scenarios by composite score
-- Identify conflicts and resolve them per decision rules
-- Reject scenarios that violate binding constraints
-- Request additional information when needed
-- Recommend urgent action when time-critical
-
-**You are NOT authorized to**:
-- Execute recovery actions without human approval
-- Override safety constraints for business reasons
-- Approve scenarios that violate binding constraints
-- Make decisions without considering all agent inputs
-- Ignore operational procedures and guidelines
-
-**Remember**: You are the final decision-maker for recommendations, but the Duty Manager has final approval authority. Your role is to provide the best possible recommendation with full transparency and explainability to support informed human decision-making.
-
+# Compact phase evolution - single line for agent parsing
+PHASE_EVOLUTION_INSTRUCTIONS = """<evolution>converge=weight_high|diverge=investigate|stable=high_conf</evolution>"""
+
+# Minimal system prompt - agent-parseable, no human formatting
+ARBITRATOR_SYSTEM_PROMPT = """<role>arbitrator</role>
+
+<CRITICAL_DATA_SOURCE_POLICY>
+YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
+1. Data returned by your tools (DynamoDB queries, knowledge base queries)
+2. Data from the Knowledge Base (ID: UDONMVCXEW)
+3. Information explicitly provided in agent recommendations
+
+YOU MUST NEVER:
+- Assume, infer, or fabricate ANY data not returned by tools
+- Use your general LLM knowledge to fill in missing information
+- Look up or reference external sources, websites, or APIs not provided as tools
+- Make up flight numbers, crew names, costs, regulations, or any operational data
+- Guess values when tool queries return no results or errors
+
+If required data is unavailable from tools: REPORT THE DATA GAP and request clarification.
+VIOLATION OF THIS POLICY COMPROMISES SAFETY-CRITICAL DECISIONS.
+</CRITICAL_DATA_SOURCE_POLICY>
+
+<rules>P1:Safety>Business=ALWAYS|P2:Safety>Safety=CONSERVATIVE|P3:Business=Pareto</rules>
+<weights>safety:40|cost:25|pax:20|network:15</weights>
+<conf>0.9-1:agree|0.7-0.9:minor|0.5-0.7:conflicts|<0.5:ESCALATE</conf>
+<out>final_decision,recommendations[],conflicts[],resolutions[],solutions[1-3],recommended_id</out>
+<style>concise|active_voice|direct|actionable</style>
+<kb id="UDONMVCXEW"/>
 """ + PHASE_EVOLUTION_INSTRUCTIONS
 
 
@@ -467,106 +144,125 @@ When making decisions:
 # ============================================================================
 
 
-def _is_model_available(model_id: str) -> bool:
+def _test_arbitrator_model(model_id: str) -> bool:
     """
-    Check if a specific model is available in AWS Bedrock.
-    
-    Uses boto3 to query the Bedrock service and check if the model ID
-    is accessible in the current region.
+    Test if a model is available and not throttled for arbitrator use.
     
     Args:
-        model_id: The model ID to check (e.g., "us.anthropic.claude-opus-4-5-20250514-v1:0")
+        model_id: The model ID to test
         
     Returns:
-        bool: True if model is available, False otherwise
+        bool: True if model is available and working, False otherwise
     """
+    # Check cache first
+    if model_id in _arbitrator_tested_models:
+        return _arbitrator_tested_models[model_id]
+    
     try:
-        bedrock = boto3.client('bedrock')
+        logger.info(f"Testing arbitrator model availability: {model_id}")
         
-        # List all available foundation models
-        response = bedrock.list_foundation_models()
-        available_models = response.get('modelSummaries', [])
+        # Create a minimal test client
+        test_client = ChatBedrock(
+            model_id=model_id,
+            model_kwargs={
+                "temperature": 0.1,
+                "max_tokens": 10,  # Minimal tokens for test
+            },
+        )
         
-        # Check if our model ID exists in the available models
-        # We check both exact match and prefix match (without version suffix after last dash)
-        # Example: "us.anthropic.claude-opus-4-5-20250514-v1:0" -> prefix "us.anthropic.claude-opus-4-5-20250514"
-        model_prefix = model_id.rsplit('-', 1)[0] if '-v' in model_id else model_id.split(':')[0]
+        # Make a minimal test call
+        test_client.invoke("test")
         
-        for model in available_models:
-            model_id_available = model.get('modelId', '')
-            # Exact match
-            if model_id_available == model_id:
-                logger.info(f"Model {model_id} is available (exact match)")
-                return True
-            # Prefix match (same model, different version)
-            if model_id_available.startswith(model_prefix):
-                logger.info(f"Model {model_id} is available (prefix match: {model_id_available})")
-                return True
-        
-        logger.warning(f"Model {model_id} not found in available models")
-        return False
+        logger.info(f"✅ Arbitrator model {model_id} is available and working")
+        _arbitrator_tested_models[model_id] = True
+        return True
         
     except ClientError as e:
-        error_code = e.response['Error']['Code']
-        logger.warning(f"Failed to check model availability: {error_code}")
+        error_message = str(e)
+        
+        if 'ThrottlingException' in error_message or 'Too many tokens' in error_message:
+            logger.warning(f"⚠️ Arbitrator model {model_id} is throttled (quota exceeded)")
+        elif 'ValidationException' in error_message or 'not found' in error_message.lower():
+            logger.warning(f"⚠️ Arbitrator model {model_id} is not available in this region")
+        else:
+            logger.warning(f"⚠️ Arbitrator model {model_id} test failed: {error_message}")
+        
+        _arbitrator_tested_models[model_id] = False
         return False
+        
     except Exception as e:
-        logger.warning(f"Error checking model availability: {e}")
+        logger.warning(f"⚠️ Arbitrator model {model_id} test failed with unexpected error: {e}")
+        _arbitrator_tested_models[model_id] = False
         return False
 
 
 def _load_opus_model() -> ChatBedrock:
     """
-    Load Claude Opus 4.5 model with cross-region inference.
+    Load best available model for arbitrator with intelligent fallback.
     
-    Uses AWS service discovery to check if Opus 4.5 is available.
-    If not available, automatically falls back to Sonnet 4.5.
+    Tries models in priority order:
+    1. Claude Opus 4.5 (best reasoning)
+    2. Claude Sonnet 4.5 (excellent reasoning)
+    3. Claude Haiku 4.5 (fast and cost-effective)
+    4. Amazon Nova Premier (no throttling)
+    5. Amazon Nova Pro (cost-effective fallback)
     
     Returns:
-        ChatBedrock: Opus 4.5 model instance, or Sonnet 4.5 if Opus unavailable
+        ChatBedrock: Best available model instance
         
     Raises:
-        Exception: If neither model can be loaded
+        RuntimeError: If no models are available
     """
-    # First, check if Opus 4.5 is available
-    if _is_model_available(OPUS_MODEL_ID):
-        try:
-            logger.info(f"Loading Claude Opus 4.5 model: {OPUS_MODEL_ID}")
+    logger.info("Loading arbitrator model with intelligent fallback...")
+    
+    for model_config in ARBITRATOR_MODEL_PRIORITY:
+        model_id = model_config["id"]
+        model_name = model_config["name"]
+        
+        logger.info(f"Trying {model_name} for arbitrator ({model_id})...")
+        
+        # Test if model is available
+        if _test_arbitrator_model(model_id):
+            logger.info(f"✅ Using {model_name} for arbitrator: {model_config['reason']}")
+            
             return ChatBedrock(
-                model_id=OPUS_MODEL_ID,
+                model_id=model_id,
                 model_kwargs={
-                    "temperature": 0.1,  # Very low temperature for consistent decision-making
-                    "max_tokens": 16384,  # Large context for complex arbitration
+                    "temperature": model_config["temperature"],
+                    "max_tokens": model_config["max_tokens"],
                 },
             )
-        except Exception as e:
-            logger.warning(f"Failed to load Opus 4.5 model despite availability check: {e}")
-            logger.warning("Falling back to Sonnet 4.5")
-            return _load_fallback_model()
-    else:
-        # Opus not available, use fallback
-        logger.warning(
-            f"Claude Opus 4.5 ({OPUS_MODEL_ID}) is not available in this region. "
-            f"Falling back to Sonnet 4.5 ({SONNET_MODEL_ID})"
-        )
-        return _load_fallback_model()
+        else:
+            logger.warning(f"❌ {model_name} not available for arbitrator, trying next model...")
+    
+    # If we get here, no models worked
+    error_msg = "❌ CRITICAL: No arbitrator models available! All models failed or are throttled."
+    logger.error(error_msg)
+    logger.error("Available arbitrator models tried:")
+    for model_config in ARBITRATOR_MODEL_PRIORITY:
+        logger.error(f"  - {model_config['name']}: {model_config['id']}")
+    
+    raise RuntimeError(
+        "No Bedrock models available for arbitrator. Please check:\n"
+        "1. AWS credentials and permissions\n"
+        "2. Model access in AWS Bedrock console\n"
+        "3. Daily token quotas (may need to wait or request increase)\n"
+        "4. Region availability (us-east-1 recommended)"
+    )
 
 
 def _load_fallback_model() -> ChatBedrock:
     """
-    Load fallback Sonnet model if Opus unavailable.
+    DEPRECATED: Use _load_opus_model() which now has built-in fallback logic.
+    
+    This function is kept for backward compatibility but now just calls
+    the main model loading function.
     
     Returns:
-        ChatBedrock: Sonnet 4.5 model instance
+        ChatBedrock: Best available model instance
     """
-    logger.warning(f"Falling back to Sonnet model: {SONNET_MODEL_ID}")
-    return ChatBedrock(
-        model_id=SONNET_MODEL_ID,
-        model_kwargs={
-            "temperature": 0.1,
-            "max_tokens": 8192,
-        },
-    )
+    logger.warning("_load_fallback_model() is deprecated, using _load_opus_model() instead")
+    return _load_opus_model()
 
 
 def _extract_safety_agents(responses: Dict[str, Any]) -> Dict[str, Any]:
@@ -671,6 +367,206 @@ def _format_agent_responses(responses: Dict[str, Any]) -> str:
             formatted.append("")
     
     return "\n".join(formatted)
+
+
+# ============================================================================
+# Compact Formatting Functions (Token-Optimized for A2A)
+# ============================================================================
+
+
+def _format_agent_responses_compact(responses: Dict[str, Any]) -> str:
+    """
+    Format agent responses in compact pipe-delimited format for token efficiency.
+
+    Format: TYPE:agent|rec:recommendation|c:confidence|bc:constraint1;constraint2
+
+    Args:
+        responses: All agent responses
+
+    Returns:
+        Compact pipe-delimited string (~100-150 tokens vs 300-500 verbose)
+    """
+    lines = []
+
+    # Agent abbreviations
+    abbrev = {
+        "crew_compliance": "crew",
+        "maintenance": "maint",
+        "regulatory": "reg",
+        "network": "net",
+        "guest_experience": "gx",
+        "cargo": "cargo",
+        "finance": "fin"
+    }
+
+    # Format safety agents
+    safety_agents = _extract_safety_agents(responses)
+    for agent_name, response in safety_agents.items():
+        name = abbrev.get(agent_name, agent_name[:4])
+        rec = response.get('recommendation', 'N/A')[:80]
+        conf = response.get('confidence', 0.0)
+        bc = response.get('binding_constraints', [])
+        bc_str = ";".join(bc[:3]) if bc else ""
+
+        line = f"SAFETY:{name}|rec:{rec}|c:{conf:.2f}"
+        if bc_str:
+            line += f"|bc:{bc_str}"
+        lines.append(line)
+
+    # Format business agents
+    business_agents = _extract_business_agents(responses)
+    for agent_name, response in business_agents.items():
+        name = abbrev.get(agent_name, agent_name[:4])
+        rec = response.get('recommendation', 'N/A')[:80]
+        conf = response.get('confidence', 0.0)
+
+        lines.append(f"BUSINESS:{name}|rec:{rec}|c:{conf:.2f}")
+
+    return "\n".join(lines)
+
+
+def _format_phase_comparison_compact(
+    initial_responses: Dict[str, Any],
+    revised_responses: Dict[str, Any]
+) -> str:
+    """
+    Format phase comparison in minimal agent-parseable format.
+
+    Format:
+        EVOLUTION:changed=N|stable=N|new=N|dropped=N
+        CHANGED:agent|p1_c:X|p2_c:Y|dir:CONVERGED|new_bc:constraint
+        STABLE:agent1,agent2,agent3
+
+    Args:
+        initial_responses: Dict of Phase 1 agent responses
+        revised_responses: Dict of Phase 2 agent responses
+
+    Returns:
+        Compact evolution text (~200-400 tokens vs 1,500-2,500 verbose)
+    """
+    lines = []
+
+    # Agent abbreviations
+    abbrev = {
+        "crew_compliance": "crew",
+        "maintenance": "maint",
+        "regulatory": "reg",
+        "network": "net",
+        "guest_experience": "gx",
+        "cargo": "cargo",
+        "finance": "fin"
+    }
+
+    all_agents = set(initial_responses.keys()) | set(revised_responses.keys())
+
+    changed = []
+    stable = []
+    new_agents = []
+    dropped = []
+
+    for agent_name in sorted(all_agents):
+        name = abbrev.get(agent_name, agent_name[:4])
+        initial = initial_responses.get(agent_name)
+        revised = revised_responses.get(agent_name)
+
+        if initial is None and revised is not None:
+            new_agents.append(name)
+        elif initial is not None and revised is None:
+            dropped.append(name)
+        elif initial is not None and revised is not None:
+            initial_rec = initial.get('recommendation', '') if isinstance(initial, dict) else str(initial)
+            revised_rec = revised.get('recommendation', '') if isinstance(revised, dict) else str(revised)
+            initial_conf = initial.get('confidence', 0.0) if isinstance(initial, dict) else 0.0
+            revised_conf = revised.get('confidence', 0.0) if isinstance(revised, dict) else 0.0
+
+            if initial_rec.strip().lower() == revised_rec.strip().lower():
+                stable.append(name)
+            else:
+                # Determine direction
+                conf_change = revised_conf - initial_conf
+                if conf_change > 0.05:
+                    direction = "CONVERGED"
+                elif conf_change < -0.05:
+                    direction = "DIVERGED"
+                else:
+                    direction = "REVISED"
+
+                # Check for new constraints
+                initial_bc = set(initial.get('binding_constraints', []) if isinstance(initial, dict) else [])
+                revised_bc = set(revised.get('binding_constraints', []) if isinstance(revised, dict) else [])
+                new_bc = revised_bc - initial_bc
+
+                change_line = f"CHANGED:{name}|p1_c:{initial_conf:.2f}|p2_c:{revised_conf:.2f}|dir:{direction}"
+                if new_bc:
+                    change_line += f"|new_bc:{';'.join(list(new_bc)[:2])}"
+                changed.append(change_line)
+
+    # Build summary line
+    lines.append(f"EVOLUTION:changed={len(changed)}|stable={len(stable)}|new={len(new_agents)}|dropped={len(dropped)}")
+
+    # Add change details
+    for change_line in changed:
+        lines.append(change_line)
+
+    # Add stable agents (comma-separated)
+    if stable:
+        lines.append(f"STABLE:{','.join(stable)}")
+
+    # Add new/dropped if any
+    if new_agents:
+        lines.append(f"NEW:{','.join(new_agents)}")
+    if dropped:
+        lines.append(f"DROPPED:{','.join(dropped)}")
+
+    return "\n".join(lines)
+
+
+def _format_operational_context_compact(procedures: Dict[str, Any]) -> str:
+    """
+    Format operational context in compact key-value format.
+
+    Format:
+        KB:id|docs:N|protocols:p1,p2,p3
+        GUIDANCE:key_point1,key_point2
+        DOC1:type|rel:X%|key:summary
+
+    Args:
+        procedures: Operational procedures data from knowledge base
+
+    Returns:
+        Compact KB context (~300-500 tokens vs 1,000-2,000 verbose)
+    """
+    if not procedures or not procedures.get('procedures'):
+        return ""
+
+    lines = []
+
+    # Summary line
+    kb_id = KNOWLEDGE_BASE_ID
+    docs_found = procedures.get('documents_found', 0)
+    protocols = procedures.get('applicable_protocols', [])[:5]
+    protocols_str = ",".join(protocols) if protocols else "none"
+
+    lines.append(f"KB:{kb_id}|docs:{docs_found}|protocols:{protocols_str}")
+
+    # Decision guidance (compact)
+    guidance = procedures.get('decision_guidance', '')
+    if guidance:
+        # Extract key phrases (first 100 chars, split on periods)
+        key_points = [p.strip()[:50] for p in guidance.split('.')[:3] if p.strip()]
+        if key_points:
+            lines.append(f"GUIDANCE:{','.join(key_points)}")
+
+    # Documents (compact)
+    proc_list = procedures.get('procedures', [])
+    for i, proc in enumerate(proc_list[:3], 1):
+        doc_type = proc.get('document_type', 'DOC')[:10]
+        score = proc.get('relevance_score', 0.0)
+        content = proc.get('content', '')[:100].replace('\n', ' ').strip()
+
+        lines.append(f"DOC{i}:{doc_type}|rel:{score:.0%}|key:{content}")
+
+    return "\n".join(lines)
 
 
 def _infer_disruption_type(responses: Dict[str, Any]) -> str:
@@ -1238,8 +1134,8 @@ async def arbitrate(
     binding_constraints = _extract_binding_constraints(responses_dict)
     logger.info(f"Extracted {len(binding_constraints)} binding constraints")
     
-    # Format agent responses for prompt
-    formatted_responses = _format_agent_responses(responses_dict)
+    # Format agent responses for prompt (compact format for token efficiency)
+    formatted_responses = _format_agent_responses_compact(responses_dict)
     
     # =========================================================================
     # Phase Evolution Analysis (Dual-Phase Input Enhancement)
@@ -1275,9 +1171,9 @@ async def arbitrate(
                     "reasoning": "Response format unknown"
                 }
         
-        # Generate phase comparison text for prompt
-        phase_comparison = _format_phase_comparison(initial_responses_dict, responses_dict)
-        logger.info(f"Phase comparison generated: {len(phase_comparison)} characters")
+        # Generate phase comparison text for prompt (compact format)
+        phase_comparison = _format_phase_comparison_compact(initial_responses_dict, responses_dict)
+        logger.info(f"Phase comparison generated (compact): {len(phase_comparison)} characters")
         
         # Analyze recommendation evolution for output
         evolution_details = _analyze_recommendation_evolution(initial_responses_dict, responses_dict)
@@ -1327,9 +1223,9 @@ async def arbitrate(
                     'query_timestamp': procedures.get('timestamp', '')
                 }
                 
-                # Build operational context for the prompt
-                operational_context = _format_operational_context(procedures)
-                logger.info(f"Operational procedures found: {procedures.get('documents_found', 0)} documents")
+                # Build operational context for the prompt (compact format)
+                operational_context = _format_operational_context_compact(procedures)
+                logger.info(f"Operational procedures found (compact): {procedures.get('documents_found', 0)} documents")
             else:
                 kb_metadata = {
                     'knowledge_base_queried': True,
@@ -1352,38 +1248,20 @@ async def arbitrate(
             'error': str(e)
         }
     
-    # Create arbitration prompt with operational context and phase comparison
-    prompt = f"""You are the Arbitrator Agent. Review the following agent recommendations and make the final decision.
+    # Create compact arbitration prompt
+    bc_str = "|".join(f"{c['agent']}:{c['constraint']}" for c in binding_constraints) if binding_constraints else "none"
 
+    prompt = f"""AGENTS:
 {formatted_responses}
-{phase_comparison}
 
-## Binding Constraints (MUST BE SATISFIED)
+{phase_comparison if phase_comparison else ""}
 
-{chr(10).join(f"- {c['agent']}: {c['constraint']}" for c in binding_constraints) if binding_constraints else "None"}
-{operational_context}
+BINDING_CONSTRAINTS:{bc_str}
 
-## Your Task
+{operational_context if operational_context else ""}
 
-1. Identify any conflicts between agent recommendations
-2. Classify each conflict (safety vs business, safety vs safety, business vs business)
-3. Apply the appropriate decision rule for each conflict
-4. Ensure all binding constraints are satisfied
-5. Generate a final decision with clear recommendations
-6. Reference operational procedures and guidelines from the Knowledge Base when making decisions
-7. {"Use phase evolution analysis to inform your decision (see Phase Evolution Analysis section above)" if phase_comparison else "Provide detailed justification and reasoning"}
-
-Remember:
-- Safety constraints are NON-NEGOTIABLE
-- For safety vs safety conflicts, choose the MOST CONSERVATIVE option
-- Document all conflict resolutions
-- Provide actionable recommendations
-- Align decisions with established operational procedures (SOPs, OCM, Process Manuals)
-{"- Weight converged recommendations more heavily (positive signal)" if phase_comparison else ""}
-{"- Investigate divergence patterns carefully (warning signal)" if phase_comparison else ""}
-{"- Treat stable recommendations as high-confidence signals" if phase_comparison else ""}
-
-Generate your decision now."""
+TASK:resolve_conflicts|classify|apply_rules|satisfy_bc|generate_solutions[1-3]|recommend_best
+{"EVOLUTION_WEIGHT:converge=high|diverge=investigate|stable=confident" if phase_comparison else ""}"""
     
     try:
         # Use structured output to get arbitrator decision with multiple solutions

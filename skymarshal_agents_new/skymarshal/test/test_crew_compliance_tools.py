@@ -1,186 +1,185 @@
-"""
-Unit Tests for Crew Compliance Agent DynamoDB Query Tools
-
-Feature: skymarshal-multi-round-orchestration
-Task: 10.2 Implement DynamoDB query tools
-Validates: Requirements 2.1-2.7, 7.1
-
-Tests that the Crew Compliance agent has properly defined DynamoDB query tools
-using the @tool decorator and that they use the correct GSIs and table access.
-"""
+"""Unit tests for crew compliance agent tools"""
 
 import pytest
-from langchain_core.tools import BaseTool
-from agents.crew_compliance.agent import (
-    query_flight,
-    query_crew_roster,
-    query_crew_members,
-)
-from database.constants import (
-    FLIGHTS_TABLE,
-    CREW_ROSTER_TABLE,
-    CREW_MEMBERS_TABLE,
-    FLIGHT_NUMBER_DATE_INDEX,
-    FLIGHT_POSITION_INDEX,
-)
+import json
+from unittest.mock import Mock, patch, MagicMock
+from database.tools import get_crew_compliance_tools
 
 
-class TestCrewComplianceToolDefinitions:
-    """Test that Crew Compliance agent tools are properly defined."""
+class TestCrewComplianceTools:
+    """Test crew compliance agent database tools"""
 
-    def test_query_flight_is_tool(self):
-        """Test that query_flight is a LangChain Tool."""
-        assert isinstance(query_flight, BaseTool), \
-            "query_flight should be a LangChain Tool (created with @tool decorator)"
+    @pytest.fixture
+    def mock_db_client(self):
+        """Create a mock DynamoDB client"""
+        with patch('database.tools.DynamoDBClient') as mock_client_class:
+            mock_instance = Mock()
+            mock_client_class.return_value = mock_instance
+            yield mock_instance
 
-    def test_query_crew_roster_is_tool(self):
-        """Test that query_crew_roster is a LangChain Tool."""
-        assert isinstance(query_crew_roster, BaseTool), \
-            "query_crew_roster should be a LangChain Tool (created with @tool decorator)"
-
-    def test_query_crew_members_is_tool(self):
-        """Test that query_crew_members is a LangChain Tool."""
-        assert isinstance(query_crew_members, BaseTool), \
-            "query_crew_members should be a LangChain Tool (created with @tool decorator)"
-
-    def test_query_flight_has_name(self):
-        """Test that query_flight has a proper name."""
-        assert query_flight.name == "query_flight", \
-            "Tool name should match function name"
-
-    def test_query_crew_roster_has_name(self):
-        """Test that query_crew_roster has a proper name."""
-        assert query_crew_roster.name == "query_crew_roster", \
-            "Tool name should match function name"
-
-    def test_query_crew_members_has_name(self):
-        """Test that query_crew_members has a proper name."""
-        assert query_crew_members.name == "query_crew_members", \
-            "Tool name should match function name"
-
-    def test_query_flight_has_description(self):
-        """Test that query_flight has a description."""
-        assert query_flight.description, \
-            "Tool should have a description from docstring"
-        assert "flight number" in query_flight.description.lower(), \
-            "Description should mention flight number"
-        assert "date" in query_flight.description.lower(), \
-            "Description should mention date"
-
-    def test_query_crew_roster_has_description(self):
-        """Test that query_crew_roster has a description."""
-        assert query_crew_roster.description, \
-            "Tool should have a description from docstring"
-        assert "crew roster" in query_crew_roster.description.lower(), \
-            "Description should mention crew roster"
-        assert "flight" in query_crew_roster.description.lower(), \
-            "Description should mention flight"
-
-    def test_query_crew_members_has_description(self):
-        """Test that query_crew_members has a description."""
-        assert query_crew_members.description, \
-            "Tool should have a description from docstring"
-        assert "crew member" in query_crew_members.description.lower(), \
-            "Description should mention crew member"
-
-
-class TestCrewComplianceToolInputs:
-    """Test that tools have correct input schemas."""
-
-    def test_query_flight_inputs(self):
-        """Test query_flight has correct input parameters."""
-        # Get the tool's input schema
-        schema = query_flight.args_schema
-        assert schema is not None, "Tool should have input schema"
+    def test_query_crew_roster_and_members_uses_batch(self, mock_db_client):
+        """
+        Test that query_crew_roster_and_members uses batch_get_crew_members
+        instead of individual queries.
         
-        # Check that it has the expected fields
-        fields = schema.model_fields
-        assert "flight_number" in fields, "Should have flight_number parameter"
-        assert "date" in fields, "Should have date parameter"
-
-    def test_query_crew_roster_inputs(self):
-        """Test query_crew_roster has correct input parameters."""
-        schema = query_crew_roster.args_schema
-        assert schema is not None, "Tool should have input schema"
+        Validates: Requirements 3.7 - Agents use batch query methods when multiple items needed
+        """
+        # Setup mock data
+        mock_roster = [
+            {"crew_id": "C001", "position_id": "CAPT", "duty_start": "2024-01-15T06:00:00Z"},
+            {"crew_id": "C002", "position_id": "FO", "duty_start": "2024-01-15T06:00:00Z"},
+            {"crew_id": "C003", "position_id": "FA1", "duty_start": "2024-01-15T06:00:00Z"},
+            {"crew_id": "C004", "position_id": "FA2", "duty_start": "2024-01-15T06:00:00Z"},
+        ]
         
-        fields = schema.model_fields
-        assert "flight_id" in fields, "Should have flight_id parameter"
-
-    def test_query_crew_members_inputs(self):
-        """Test query_crew_members has correct input parameters."""
-        schema = query_crew_members.args_schema
-        assert schema is not None, "Tool should have input schema"
+        mock_crew_members = [
+            {"crew_id": "C001", "name": "John Smith", "qualifications": ["A380", "B777"]},
+            {"crew_id": "C002", "name": "Jane Doe", "qualifications": ["A380"]},
+            {"crew_id": "C003", "name": "Bob Johnson", "qualifications": ["FA"]},
+            {"crew_id": "C004", "name": "Alice Williams", "qualifications": ["FA"]},
+        ]
         
-        fields = schema.model_fields
-        assert "crew_id" in fields, "Should have crew_id parameter"
-
-
-class TestCrewComplianceTableAccess:
-    """Test that tools only access authorized tables."""
-
-    def test_authorized_tables(self):
-        """Test that Crew Compliance agent only accesses authorized tables."""
-        from database.constants import AGENT_TABLE_ACCESS
+        # Configure mock
+        mock_db_client.query_crew_roster_by_flight.return_value = mock_roster
+        mock_db_client.batch_get_crew_members.return_value = mock_crew_members
+        mock_db_client.to_json = lambda x: json.dumps(x)
         
-        authorized_tables = AGENT_TABLE_ACCESS["crew_compliance"]
+        # Get tools and execute
+        tools = get_crew_compliance_tools()
+        query_crew_roster_and_members = tools[2]  # Third tool in the list
         
-        # Verify the three authorized tables
-        assert FLIGHTS_TABLE in authorized_tables, \
-            "Crew Compliance should access flights table"
-        assert CREW_ROSTER_TABLE in authorized_tables, \
-            "Crew Compliance should access CrewRoster table"
-        assert CREW_MEMBERS_TABLE in authorized_tables, \
-            "Crew Compliance should access CrewMembers table"
+        result_json = query_crew_roster_and_members.invoke({"flight_id": "EY123"})
+        result = json.loads(result_json)
         
-        # Verify exactly 3 tables
-        assert len(authorized_tables) == 3, \
-            "Crew Compliance should have exactly 3 authorized tables"
+        # Verify batch method was called
+        mock_db_client.batch_get_crew_members.assert_called_once()
+        
+        # Verify it was called with the correct crew IDs
+        call_args = mock_db_client.batch_get_crew_members.call_args[0][0]
+        assert set(call_args) == {"C001", "C002", "C003", "C004"}
+        
+        # Verify only 2 queries were made (roster + batch)
+        assert result["query_count"] == 2
+        assert "Batch" in result["query_method"]
+        
+        # Verify optimization message
+        assert "Reduced from 5 queries to 2 queries" in result["optimization"]
 
-    def test_gsi_usage(self):
-        """Test that Crew Compliance agent uses correct GSIs."""
-        from database.constants import AGENT_GSI_ACCESS
+    def test_query_crew_roster_and_members_empty_roster(self, mock_db_client):
+        """
+        Test that query_crew_roster_and_members handles empty roster correctly.
+        """
+        # Configure mock for empty roster
+        mock_db_client.query_crew_roster_by_flight.return_value = []
+        mock_db_client.to_json = lambda x: json.dumps(x)
         
-        authorized_gsis = AGENT_GSI_ACCESS["crew_compliance"]
+        # Get tools and execute
+        tools = get_crew_compliance_tools()
+        query_crew_roster_and_members = tools[2]
         
-        # Verify the required GSIs
-        assert FLIGHT_NUMBER_DATE_INDEX in authorized_gsis, \
-            "Should use flight-number-date-index for flight lookup"
-        assert FLIGHT_POSITION_INDEX in authorized_gsis, \
-            "Should use flight-position-index for crew roster queries"
+        result_json = query_crew_roster_and_members.invoke({"flight_id": "EY123"})
+        result = json.loads(result_json)
+        
+        # Verify batch method was NOT called for empty roster
+        mock_db_client.batch_get_crew_members.assert_not_called()
+        
+        # Verify response structure
+        assert result["crew_count"] == 0
+        assert result["roster"] == []
+        assert result["crew_members"] == []
+        assert result["query_count"] == 1  # Only roster query
 
-
-class TestCrewComplianceToolIntegration:
-    """Integration tests for tool usage in agent."""
-
-    def test_agent_has_tools_available(self):
-        """Test that the agent can access its tools."""
-        from agents.crew_compliance.agent import analyze_crew_compliance
-        import inspect
+    def test_query_crew_roster_and_members_enriches_data(self, mock_db_client):
+        """
+        Test that query_crew_roster_and_members enriches roster with crew details.
+        """
+        # Setup mock data
+        mock_roster = [
+            {"crew_id": "C001", "position_id": "CAPT"},
+            {"crew_id": "C002", "position_id": "FO"},
+        ]
         
-        # Verify the agent function exists
-        assert callable(analyze_crew_compliance)
+        mock_crew_members = [
+            {"crew_id": "C001", "name": "John Smith"},
+            {"crew_id": "C002", "name": "Jane Doe"},
+        ]
         
-        # Verify it's async
-        assert inspect.iscoroutinefunction(analyze_crew_compliance)
+        # Configure mock
+        mock_db_client.query_crew_roster_by_flight.return_value = mock_roster
+        mock_db_client.batch_get_crew_members.return_value = mock_crew_members
+        mock_db_client.to_json = lambda x: json.dumps(x)
         
-        # Verify it has the expected parameters
-        sig = inspect.signature(analyze_crew_compliance)
-        params = list(sig.parameters.keys())
-        assert "payload" in params
-        assert "llm" in params
-        assert "mcp_tools" in params
+        # Get tools and execute
+        tools = get_crew_compliance_tools()
+        query_crew_roster_and_members = tools[2]
+        
+        result_json = query_crew_roster_and_members.invoke({"flight_id": "EY123"})
+        result = json.loads(result_json)
+        
+        # Verify roster is enriched with crew member details
+        assert len(result["roster"]) == 2
+        assert result["roster"][0]["crew_member_details"]["name"] == "John Smith"
+        assert result["roster"][1]["crew_member_details"]["name"] == "Jane Doe"
 
-    def test_tools_list_creation(self):
-        """Test that tools can be collected into a list."""
-        tools = [query_flight, query_crew_roster, query_crew_members]
+    def test_batch_method_is_synchronous(self, mock_db_client):
+        """
+        Test that batch_get_crew_members is called synchronously (no await).
         
-        assert len(tools) == 3, "Should have 3 DynamoDB query tools"
+        This test verifies that the implementation correctly uses the synchronous
+        batch method as specified in the task requirements.
+        """
+        # Setup mock data
+        mock_roster = [{"crew_id": "C001", "position_id": "CAPT"}]
+        mock_crew_members = [{"crew_id": "C001", "name": "John Smith"}]
         
-        # Verify all are BaseTool instances
-        for tool in tools:
-            assert isinstance(tool, BaseTool), \
-                f"Tool {tool.name} should be a LangChain BaseTool"
+        # Configure mock
+        mock_db_client.query_crew_roster_by_flight.return_value = mock_roster
+        mock_db_client.batch_get_crew_members.return_value = mock_crew_members
+        mock_db_client.to_json = lambda x: json.dumps(x)
+        
+        # Get tools and execute
+        tools = get_crew_compliance_tools()
+        query_crew_roster_and_members = tools[2]
+        
+        # This should execute without any async/await issues
+        result_json = query_crew_roster_and_members.invoke({"flight_id": "EY123"})
+        result = json.loads(result_json)
+        
+        # Verify successful execution
+        assert result["crew_count"] == 1
+        assert mock_db_client.batch_get_crew_members.called
 
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_query_crew_roster_and_members_handles_missing_crew_ids(self, mock_db_client):
+        """
+        Test that query_crew_roster_and_members handles roster entries without crew_id.
+        """
+        # Setup mock data with some missing crew_ids
+        mock_roster = [
+            {"crew_id": "C001", "position_id": "CAPT"},
+            {"position_id": "FO"},  # Missing crew_id
+            {"crew_id": "C003", "position_id": "FA1"},
+        ]
+        
+        mock_crew_members = [
+            {"crew_id": "C001", "name": "John Smith"},
+            {"crew_id": "C003", "name": "Bob Johnson"},
+        ]
+        
+        # Configure mock
+        mock_db_client.query_crew_roster_by_flight.return_value = mock_roster
+        mock_db_client.batch_get_crew_members.return_value = mock_crew_members
+        mock_db_client.to_json = lambda x: json.dumps(x)
+        
+        # Get tools and execute
+        tools = get_crew_compliance_tools()
+        query_crew_roster_and_members = tools[2]
+        
+        result_json = query_crew_roster_and_members.invoke({"flight_id": "EY123"})
+        result = json.loads(result_json)
+        
+        # Verify batch method was called with only valid crew IDs
+        call_args = mock_db_client.batch_get_crew_members.call_args[0][0]
+        assert set(call_args) == {"C001", "C003"}
+        
+        # Verify roster still contains all entries
+        assert len(result["roster"]) == 3
