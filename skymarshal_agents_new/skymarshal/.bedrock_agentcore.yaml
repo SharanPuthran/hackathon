@@ -32,7 +32,7 @@ agents:
     bedrock_agentcore:
       agent_id: skymarshal_Agent-cn8OdHGjgz
       agent_arn: arn:aws:bedrock-agentcore:us-east-1:368613657554:runtime/skymarshal_Agent-cn8OdHGjgz
-      agent_session_id: 04d27eed-4b54-473d-981c-159dea13d76c
+      agent_session_id: null
     codebuild:
       project_name: null
       execution_role: null

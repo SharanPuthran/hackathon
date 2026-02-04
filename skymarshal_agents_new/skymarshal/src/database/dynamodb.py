@@ -535,7 +535,7 @@ class DynamoDBClient:
         try:
             response = self.flights.query(
                 IndexName="flight-number-date-index",
-                KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+                KeyConditionExpression="flight_number = :fn AND scheduled_departure_utc = :sd",
                 ExpressionAttributeValues={
                     ":fn": str(flight_number),
                     ":sd": str(scheduled_departure),

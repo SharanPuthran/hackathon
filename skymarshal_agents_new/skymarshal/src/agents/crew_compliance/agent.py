@@ -10,13 +10,12 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    CREW_ROSTER_TABLE,
-    CREW_MEMBERS_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     FLIGHT_POSITION_INDEX,
     CREW_DUTY_DATE_INDEX,
+    RESERVE_BASE_STATUS_INDEX,
 )
 from agents.schemas import FlightInfo, AgentResponse
 
@@ -26,22 +25,11 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """
 <role>crew_compliance</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_crew_roster, query_crew_members)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY crew data not returned by tools
-- Use your general LLM knowledge to fill in missing FDP, rest, or qualification data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up crew names, duty times, rest periods, qualifications, or medical certificate statuses
-- Guess FDP limits, rest requirements, or crew availability when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY COMPROMISES FLIGHT SAFETY AND REGULATORY COMPLIANCE.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="binding">fdp_limits, rest_requirements, qualifications</constraints>
 
@@ -138,11 +126,11 @@ def query_flight(flight_number: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={
                 ":fn": flight_number,
                 ":sd": date,
@@ -204,7 +192,7 @@ def query_crew_roster(flight_id: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        crew_roster_table = dynamodb.Table(CREW_ROSTER_TABLE)
+        crew_roster_table = dynamodb.Table(get_table_name("crew_roster"))
         
         response = crew_roster_table.query(
             IndexName=FLIGHT_POSITION_INDEX,
@@ -264,7 +252,7 @@ def query_crew_members(crew_id: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        crew_members_table = dynamodb.Table(CREW_MEMBERS_TABLE)
+        crew_members_table = dynamodb.Table(get_table_name("crew_members"))
         
         response = crew_members_table.get_item(
             Key={"crew_id": crew_id}
@@ -293,6 +281,74 @@ def query_crew_members(crew_id: str) -> str:
             "error_type": type(e).__name__,
             "suggestion": "This may be a temporary database issue. Please try again or contact support if the problem persists."
         }
+
+
+@tool
+def query_reserve_crew(base: str, role: str) -> str:
+    """Query reserve crew availability at a base for a specific role.
+
+    This tool retrieves available reserve crew members from the reserve_crew_v2 table
+    who can be assigned as replacements when regular crew exceed FDP limits.
+
+    Args:
+        base: Airport IATA code where reserve crew is based (e.g., AUH, LHR, DXB)
+        role: Crew role to search for (e.g., Captain, First_Officer, Purser, Flight_Attendant)
+
+    Returns:
+        str: JSON string containing list of available reserve crew with their qualifications
+             Returns JSON with 'error' key if no reserve crew found or query fails
+
+    Example:
+        >>> result = query_reserve_crew("AUH", "Captain")
+        >>> crew = json.loads(result)
+        >>> print(len(crew["available_crew"]))
+        3
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        reserve_table = dynamodb.Table(get_table_name("reserve_crew"))
+
+        # Query using base-status-index GSI
+        response = reserve_table.query(
+            IndexName=RESERVE_BASE_STATUS_INDEX,
+            KeyConditionExpression="base = :b AND availability_status = :s",
+            FilterExpression="crew_role = :r",
+            ExpressionAttributeValues={
+                ":b": base,
+                ":s": "AVAILABLE",
+                ":r": role
+            }
+        )
+
+        items = response.get("Items", [])
+
+        if not items:
+            logger.info(f"No reserve {role} available at {base}")
+            return json.dumps({
+                "base": base,
+                "role": role,
+                "available_crew": [],
+                "message": f"No reserve {role} currently available at {base}",
+                "data_source": "reserve_crew_v2"
+            })
+
+        logger.info(f"Found {len(items)} reserve {role}(s) available at {base}")
+        return json.dumps({
+            "base": base,
+            "role": role,
+            "available_crew": items,
+            "total_available": len(items),
+            "data_source": "reserve_crew_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying reserve crew at {base} for {role}: {e}")
+        return json.dumps({
+            "error": type(e).__name__,
+            "message": f"Failed to query reserve crew: {str(e)}",
+            "base": base,
+            "role": role
+        })
 
 
 async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> dict:
@@ -430,7 +486,7 @@ async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> d
         
         # Step 2: Define agent-specific tools
         # These are the DynamoDB query tools defined above
-        agent_tools = [query_flight, query_crew_roster, query_crew_members]
+        agent_tools = [query_flight, query_crew_roster, query_crew_members, query_reserve_crew]
         
         # Combine with MCP tools if provided
         all_tools = agent_tools + (mcp_tools if mcp_tools else [])
@@ -454,7 +510,8 @@ async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> d
 2. query_crew_roster(flight_id)
 3. query_crew_members(crew_id) for each crew
 4. Calculate FDP, validate limits, assess risk
-5. Return AgentResponse
+5. If crew change needed → query_reserve_crew(base, role)
+6. Return AgentResponse
 </action>"""
 
         else:  # revision phase
@@ -566,7 +623,7 @@ async def analyze_crew_compliance(payload: dict, llm: Any, mcp_tools: list) -> d
             "confidence": 0.85,  # Default confidence, agent should specify
             "binding_constraints": [],  # Extract from agent response
             "reasoning": agent_response_text,
-            "data_sources": ["flights", "CrewRoster", "CrewMembers"],
+            "data_sources": ["flights_v2", "crew_roster_v2", "CrewMembers", "reserve_crew_v2"],
             "extracted_flight_info": extracted_flight_info,
             "timestamp": end_time.isoformat(),
             "status": "success",

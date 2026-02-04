@@ -10,13 +10,15 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    CARGO_FLIGHT_ASSIGNMENTS_TABLE,
-    CARGO_SHIPMENTS_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     FLIGHT_LOADING_INDEX,
     SHIPMENT_INDEX,
+    AIRPORT_INDEX,
+    EQUIPMENT_AIRPORT_TYPE_INDEX,
+    AWB_INDEX,
+    FIRST_LEG_FLIGHT_INDEX,
 )
 from agents.schemas import FlightInfo, AgentResponse, CargoOutput
 
@@ -54,13 +56,13 @@ def query_flight(flight_number: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         logger.info(f"Querying flight: {flight_number} on {date}")
         
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={
                 ":fn": flight_number,
                 ":sd": date,
@@ -82,35 +84,38 @@ def query_flight(flight_number: str, date: str) -> str:
 
 @tool
 def query_cargo_manifest(flight_id: str) -> str:
-    """Query cargo manifest for a flight using GSI.
-    
-    This tool retrieves all cargo assignments for a specific flight using the
-    flight-loading-index GSI. Returns cargo assignments with loading status.
-    
+    """Query cargo manifest for a flight using V2 cargo_shipments table with first-leg-flight-index GSI.
+
+    This tool retrieves all cargo shipments for a specific flight using the
+    first-leg-flight-index GSI on cargo_shipments_v2. Returns shipment details
+    including AWB, cargo type, weight, value, and special handling requirements.
+
     Args:
-        flight_id: Unique flight identifier (e.g., EY123-20260120)
-    
+        flight_id: Unique flight identifier (e.g., "FLT-2001")
+
     Returns:
-        JSON string containing list of cargo assignment records
+        JSON string containing list of cargo shipment records
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        cargo_table = dynamodb.Table(CARGO_FLIGHT_ASSIGNMENTS_TABLE)
-        
+        # Use cargo_shipments_v2 table with first-leg-flight-index GSI
+        # V1 CargoFlightAssignments uses numeric flight_id, V2 uses string format
+        shipments_table = dynamodb.Table(get_table_name("cargo_shipments"))
+
         logger.info(f"Querying cargo manifest for flight: {flight_id}")
-        
-        response = cargo_table.query(
-            IndexName=FLIGHT_LOADING_INDEX,
-            KeyConditionExpression="flight_id = :fid",
+
+        response = shipments_table.query(
+            IndexName=FIRST_LEG_FLIGHT_INDEX,
+            KeyConditionExpression="first_leg_flight_id = :fid",
             ExpressionAttributeValues={
                 ":fid": flight_id,
             },
         )
-        
+
         items = response.get("Items", [])
-        logger.info(f"Found {len(items)} cargo assignments for flight {flight_id}")
+        logger.info(f"Found {len(items)} cargo shipments for flight {flight_id}")
         return json.dumps(items, default=str)
-        
+
     except Exception as e:
         logger.error(f"Error querying cargo manifest: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
@@ -131,7 +136,7 @@ def query_shipment_details(shipment_id: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        shipments_table = dynamodb.Table(CARGO_SHIPMENTS_TABLE)
+        shipments_table = dynamodb.Table(get_table_name("cargo_shipments"))
         
         logger.info(f"Querying shipment details: {shipment_id}")
         
@@ -155,30 +160,31 @@ def query_shipment_details(shipment_id: str) -> str:
 @tool
 def query_shipment_by_awb(awb_number: str) -> str:
     """Query shipment by Air Waybill (AWB) number.
-    
+
     This tool searches for a shipment using its AWB number. AWB format is
     typically airline prefix (3 digits) + serial number (8 digits).
-    
+
     Args:
         awb_number: Air Waybill number (e.g., 607-12345678)
-    
+
     Returns:
         JSON string containing shipment record or error
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        shipments_table = dynamodb.Table(CARGO_SHIPMENTS_TABLE)
-        
+        shipments_table = dynamodb.Table(get_table_name("cargo_shipments"))
+
         logger.info(f"Querying shipment by AWB: {awb_number}")
-        
-        # Scan for AWB (in production, this should use a GSI)
-        response = shipments_table.scan(
-            FilterExpression="awb_number = :awb",
+
+        # Use awb-index GSI for efficient lookup instead of table scan
+        response = shipments_table.query(
+            IndexName=AWB_INDEX,
+            KeyConditionExpression="awb_number = :awb",
             ExpressionAttributeValues={
                 ":awb": awb_number,
             },
         )
-        
+
         items = response.get("Items", [])
         if items:
             logger.info(f"Found shipment with AWB {awb_number}: {items[0].get('shipment_id')}")
@@ -191,26 +197,104 @@ def query_shipment_by_awb(awb_number: str) -> str:
         logger.error(f"Error querying shipment by AWB: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
 
+
+@tool
+def query_cold_chain_facilities(airport_code: str) -> str:
+    """Query cold chain facilities at an airport for perishable cargo handling.
+
+    This tool retrieves information about cold storage facilities, temperature
+    capabilities, and capacity at a specific airport.
+
+    Args:
+        airport_code: Airport IATA code (e.g., AUH, LHR, DXB)
+
+    Returns:
+        JSON string containing cold chain facility details
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        facilities_table = dynamodb.Table(get_table_name("cold_chain_facilities"))
+
+        logger.info(f"Querying cold chain facilities at: {airport_code}")
+
+        # Use airport-index GSI - table PK is facility_id, not airport_code
+        response = facilities_table.query(
+            IndexName=AIRPORT_INDEX,
+            KeyConditionExpression="airport_code = :ac",
+            ExpressionAttributeValues={":ac": airport_code}
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found {len(items)} cold chain facilities at {airport_code}")
+            return json.dumps(items[0], default=str)
+        else:
+            logger.warning(f"No cold chain facilities found at {airport_code}")
+            return json.dumps({
+                "airport_code": airport_code,
+                "cold_chain_available": False,
+                "message": "No cold chain facilities data available at this airport",
+                "data_source": "cold_chain_facilities_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying cold chain facilities: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_ground_equipment(airport_code: str, equipment_type: str) -> str:
+    """Query ground equipment availability at an airport.
+
+    This tool retrieves information about ground support equipment
+    availability for cargo handling operations.
+
+    Args:
+        airport_code: Airport IATA code (e.g., AUH, LHR)
+        equipment_type: Type of equipment (e.g., "loader", "dolly", "tug", "forklift")
+
+    Returns:
+        JSON string containing ground equipment availability
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        equipment_table = dynamodb.Table(get_table_name("ground_equipment"))
+
+        logger.info(f"Querying ground equipment: {equipment_type} at {airport_code}")
+
+        response = equipment_table.query(
+            IndexName=EQUIPMENT_AIRPORT_TYPE_INDEX,
+            KeyConditionExpression="airport_code = :ac AND equipment_type = :et",
+            ExpressionAttributeValues={
+                ":ac": airport_code,
+                ":et": equipment_type
+            }
+        )
+
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} {equipment_type} equipment records at {airport_code}")
+        return json.dumps({
+            "airport_code": airport_code,
+            "equipment_type": equipment_type,
+            "equipment": items,
+            "total_available": len(items),
+            "data_source": "ground_equipment_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying ground equipment: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
 # System Prompt for Cargo Agent - OPTIMIZED for A2A Communication
 SYSTEM_PROMPT = """
 <role>cargo</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_cargo_manifest, query_shipment_details, query_shipment_by_awb)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY cargo data not returned by tools
-- Use your general LLM knowledge to fill in missing shipment information
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up shipment IDs, AWB numbers, cargo weights, commodity types, or temperature data
-- Guess cold chain limits, special handling codes, or shipment values when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY MAY RESULT IN CARGO DAMAGE OR REGULATORY NON-COMPLIANCE.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="advisory">cold_chain, hazmat, time_sensitive, high_value, live_animals</constraints>
 
@@ -336,6 +420,8 @@ async def analyze_cargo(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_cargo_manifest,
             query_shipment_details,
             query_shipment_by_awb,
+            query_cold_chain_facilities,
+            query_ground_equipment,
         ]
         
         # Step 3: Build optimized user message (SYSTEM_PROMPT sent separately as system role)

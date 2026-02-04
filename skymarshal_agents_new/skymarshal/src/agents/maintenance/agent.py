@@ -8,17 +8,15 @@ from datetime import datetime, timezone
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
-from langchain.agents import create_agent
 
+from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    MAINTENANCE_WORK_ORDERS_TABLE,
-    MAINTENANCE_STAFF_TABLE,
-    MAINTENANCE_ROSTER_TABLE,
-    AIRCRAFT_AVAILABILITY_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     AIRCRAFT_REGISTRATION_INDEX,
     WORKORDER_SHIFT_INDEX,
+    CONSTRAINT_AIRCRAFT_INDEX,
+    EQUIPMENT_AIRPORT_TYPE_INDEX,
 )
 from agents.schemas import FlightInfo, AgentResponse
 
@@ -28,22 +26,11 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """
 <role>maintenance</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_maintenance_work_orders, query_maintenance_staff, query_maintenance_roster, query_aircraft_availability)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY maintenance data not returned by tools
-- Use your general LLM knowledge to fill in missing MEL, work order, or aircraft status data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up work order IDs, MEL items, defect descriptions, repair times, or parts availability
-- Guess aircraft airworthiness status, maintenance staff availability, or RTS times when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY COMPROMISES AIRCRAFT SAFETY AND AIRWORTHINESS.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="binding">airworthiness, mel_compliance, maintenance_limits</constraints>
 
@@ -137,11 +124,11 @@ def query_flight(flight_number: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights = dynamodb.Table(FLIGHTS_TABLE)
+        flights = dynamodb.Table(get_table_name("flights"))
 
         response = flights.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={":fn": flight_number, ":sd": date}
         )
         items = response.get("Items", [])
@@ -191,7 +178,7 @@ def query_maintenance_work_orders(aircraft_registration: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        work_orders = dynamodb.Table(MAINTENANCE_WORK_ORDERS_TABLE)
+        work_orders = dynamodb.Table(get_table_name("maintenance_work_orders"))
 
         response = work_orders.query(
             IndexName=AIRCRAFT_REGISTRATION_INDEX,
@@ -239,7 +226,7 @@ def query_maintenance_staff(staff_id: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        staff_table = dynamodb.Table(MAINTENANCE_STAFF_TABLE)
+        staff_table = dynamodb.Table(get_table_name("maintenance_staff"))
 
         response = staff_table.get_item(Key={"staff_id": staff_id})
         item = response.get("Item", None)
@@ -287,7 +274,7 @@ def query_maintenance_roster(workorder_id: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        roster = dynamodb.Table(MAINTENANCE_ROSTER_TABLE)
+        roster = dynamodb.Table(get_table_name("maintenance_roster"))
 
         response = roster.query(
             IndexName=WORKORDER_SHIFT_INDEX,
@@ -336,7 +323,7 @@ def query_aircraft_availability(aircraft_registration: str, valid_from: str) -> 
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        availability = dynamodb.Table(AIRCRAFT_AVAILABILITY_TABLE)
+        availability = dynamodb.Table(get_table_name("aircraft"))
 
         response = availability.get_item(
             Key={
@@ -375,6 +362,107 @@ def query_aircraft_availability(aircraft_registration: str, valid_from: str) -> 
             "error": error_type,
             "message": error_msg,
             "aircraft_registration": aircraft_registration
+        })
+
+
+@tool
+def query_maintenance_constraints(aircraft_registration: str) -> str:
+    """Query aircraft-specific maintenance constraints and MEL restrictions.
+
+    This tool retrieves maintenance constraints from the maintenance_constraints_v2
+    table for a specific aircraft, including MEL restrictions and operational limits.
+
+    Args:
+        aircraft_registration: Aircraft registration (e.g., A6-APX)
+
+    Returns:
+        JSON string containing maintenance constraints or error
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        constraints_table = dynamodb.Table(get_table_name("maintenance_constraints"))
+
+        logger.info(f"Querying maintenance constraints for: {aircraft_registration}")
+
+        response = constraints_table.query(
+            IndexName=CONSTRAINT_AIRCRAFT_INDEX,
+            KeyConditionExpression="aircraft_registration = :ar",
+            ExpressionAttributeValues={":ar": aircraft_registration}
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found {len(items)} maintenance constraints for {aircraft_registration}")
+            return json.dumps({
+                "aircraft_registration": aircraft_registration,
+                "constraints": items,
+                "total_constraints": len(items),
+                "data_source": "maintenance_constraints_v2"
+            }, default=str)
+        else:
+            return json.dumps({
+                "aircraft_registration": aircraft_registration,
+                "constraints": [],
+                "total_constraints": 0,
+                "message": "No maintenance constraints found - aircraft may be fully serviceable",
+                "data_source": "maintenance_constraints_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying maintenance constraints: {e}")
+        return json.dumps({
+            "error": type(e).__name__,
+            "message": f"Failed to query maintenance constraints: {str(e)}",
+            "aircraft_registration": aircraft_registration
+        })
+
+
+@tool
+def query_ground_equipment(airport_code: str, equipment_type: str) -> str:
+    """Query ground support equipment availability at an airport.
+
+    This tool retrieves information about available ground support equipment
+    for maintenance operations at a specific airport.
+
+    Args:
+        airport_code: Airport IATA code (e.g., AUH, LHR)
+        equipment_type: Type of equipment (e.g., "gpu", "tow_bar", "jack", "work_platform")
+
+    Returns:
+        JSON string containing ground equipment availability
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        equipment_table = dynamodb.Table(get_table_name("ground_equipment"))
+
+        logger.info(f"Querying ground equipment: {equipment_type} at {airport_code}")
+
+        response = equipment_table.query(
+            IndexName=EQUIPMENT_AIRPORT_TYPE_INDEX,
+            KeyConditionExpression="airport_code = :ac AND equipment_type = :et",
+            ExpressionAttributeValues={
+                ":ac": airport_code,
+                ":et": equipment_type
+            }
+        )
+
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} {equipment_type} at {airport_code}")
+        return json.dumps({
+            "airport_code": airport_code,
+            "equipment_type": equipment_type,
+            "equipment": items,
+            "total_available": len(items),
+            "data_source": "ground_equipment_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying ground equipment: {e}")
+        return json.dumps({
+            "error": type(e).__name__,
+            "message": f"Failed to query ground equipment: {str(e)}",
+            "airport_code": airport_code,
+            "equipment_type": equipment_type
         })
 
 
@@ -482,19 +570,15 @@ async def analyze_maintenance(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_maintenance_work_orders,
             query_maintenance_staff,
             query_maintenance_roster,
-            query_aircraft_availability
+            query_aircraft_availability,
+            query_maintenance_constraints,
+            query_ground_equipment,
         ]
         
         # Combine with MCP tools
         all_tools = maintenance_tools + (mcp_tools or [])
         
-        # Step 3: Create agent with tools
-        agent = create_agent(
-            model=llm,
-            tools=all_tools,
-        )
-
-        # Step 4: Build optimized user message (SYSTEM_PROMPT sent separately as system role)
+        # Step 3: Build optimized user message (SYSTEM_PROMPT sent separately as system role)
         if phase == "initial":
             user_message = f"""<task>initial_analysis</task>
 <input>
@@ -546,18 +630,19 @@ async def analyze_maintenance(payload: dict, llm: Any, mcp_tools: list) -> dict:
 4. Return AgentResponse with revision_status
 </action>"""
 
-        # Step 5: Run agent with SEPARATE system and user messages
+        # Step 4: Run agent with custom tool calling (avoids Bedrock API validation errors)
         logger.info("Running maintenance agent with tools")
 
         start_time = datetime.now(timezone.utc)
 
         try:
-            result = await agent.ainvoke({
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message}
-                ]
-            })
+            result = await invoke_with_tools(
+                llm=llm,
+                system_prompt=SYSTEM_PROMPT,
+                user_message=user_message,
+                tools=all_tools,
+                max_iterations=5
+            )
         except Exception as e:
             error_type = type(e).__name__
             logger.error(f"Agent execution failed ({error_type}): {e}")
@@ -589,9 +674,32 @@ async def analyze_maintenance(payload: dict, llm: Any, mcp_tools: list) -> dict:
                 "error": str(e),
                 "error_type": error_type
             }
-        
-        # Step 6: Extract response
-        final_message = result["messages"][-1]
+
+        # Check for tool calling errors
+        if "error" in result:
+            error_type = result.get("error_type", "UnknownError")
+            logger.error(f"Tool calling failed ({error_type}): {result['error']}")
+
+            return {
+                "agent_name": "maintenance",
+                "recommendation": "CANNOT_PROCEED",
+                "confidence": 0.0,
+                "binding_constraints": [],
+                "reasoning": f"Tool calling error: {result['error']}",
+                "data_sources": [],
+                "extracted_flight_info": {
+                    "flight_number": flight_info.flight_number,
+                    "date": flight_info.date,
+                    "disruption_event": flight_info.disruption_event
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "error",
+                "error": result["error"],
+                "error_type": error_type
+            }
+
+        # Step 5: Extract response
+        final_message = result.get("final_response") or result["messages"][-1]
         
         # Parse agent response
         if hasattr(final_message, "content"):

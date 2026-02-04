@@ -1,21 +1,32 @@
 """
 API Endpoints
 
-This module provides functions for recording human solution selections
-and managing decision records. This can be integrated with FastAPI or any
-other web framework.
+This module provides functions for recording human solution selections,
+human overrides, and managing decision records. This can be integrated with
+FastAPI or any other web framework.
+
+Endpoints:
+    - POST /api/v1/save-decision: Save agent decision with detailed report
+    - POST /api/v1/submit-override: Save human override directive
+    - POST /api/select-solution: Legacy solution selection (uses in-memory cache)
+    - GET /api/disruption/{disruption_id}: Get disruption status
+    - GET /api/health: Health check
 
 Note: FastAPI integration is optional. The core functions can be used
 standalone or with any web framework.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from agents.schemas import DecisionRecord, ArbitratorOutput
-from agents.s3_storage import store_decision_to_s3
+from agents.s3_storage import (
+    store_decision_to_s3,
+    store_agent_decision,
+    store_human_override
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +34,53 @@ logger = logging.getLogger(__name__)
 _arbitrator_outputs: Dict[str, ArbitratorOutput] = {}
 
 
+# =============================================================================
+# Request/Response Models
+# =============================================================================
+
 class SolutionSelectionRequest(BaseModel):
-    """Request body for solution selection"""
+    """Request body for solution selection (legacy endpoint)"""
     disruption_id: str = Field(description="Unique identifier for the disruption")
     selected_solution_id: int = Field(description="ID of the solution selected by human (1, 2, or 3)")
     rationale: Optional[str] = Field(default=None, description="Why the human chose this solution")
 
 
+class SaveDecisionRequest(BaseModel):
+    """Request body for saving agent decision with detailed report"""
+    disruption_id: str = Field(description="Unique identifier for the disruption")
+    session_id: Optional[str] = Field(default=None, description="Session ID for context")
+    flight_number: str = Field(description="Flight number (e.g., EY123)")
+    disruption_type: str = Field(default="unknown", description="Type of disruption")
+    selected_solution: Dict[str, Any] = Field(description="The selected solution object")
+    detailed_report: Dict[str, Any] = Field(description="Full detailed report data")
+
+
+class OverrideSubmissionRequest(BaseModel):
+    """Request body for human override submission"""
+    disruption_id: str = Field(description="Unique identifier for the disruption")
+    session_id: Optional[str] = Field(default=None, description="Session ID for context")
+    flight_number: str = Field(default="UNKNOWN", description="Flight number (e.g., EY123)")
+    disruption_type: str = Field(default="unknown", description="Type of disruption")
+    override_text: str = Field(description="Human's override directive/strategy")
+    rejected_solutions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Solutions that were available but rejected"
+    )
+    context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional context (operator notes, etc.)"
+    )
+
+
 class SolutionSelectionResponse(BaseModel):
-    """Response for solution selection"""
+    """Response for solution selection and save operations"""
     status: str = Field(description="Status: success, partial_success, or error")
     message: str = Field(description="Human-readable message")
-    stored_to_buckets: Dict[str, bool] = Field(description="Storage status for each S3 bucket")
+    stored_to_buckets: Optional[Dict[str, bool]] = Field(
+        default=None,
+        description="Storage status for each S3 bucket"
+    )
+    s3_key: Optional[str] = Field(default=None, description="S3 key where record was stored")
 
 
 def register_arbitrator_output(disruption_id: str, output: ArbitratorOutput) -> None:
@@ -202,24 +248,140 @@ async def handle_solution_selection(request: SolutionSelectionRequest) -> Soluti
     )
 
 
+async def handle_save_decision(request: SaveDecisionRequest) -> SolutionSelectionResponse:
+    """
+    Handle saving an agent decision with detailed report to S3.
+
+    This endpoint is called by the frontend when:
+    1. User selects a solution
+    2. Recovery plan is executed
+    3. User views the detailed report
+
+    Args:
+        request: Save decision request with solution and report data
+
+    Returns:
+        Response with status and S3 storage location
+
+    Example:
+        >>> request = SaveDecisionRequest(
+        ...     disruption_id="DISR-2026-001",
+        ...     flight_number="EY123",
+        ...     disruption_type="mechanical",
+        ...     selected_solution={"solution_id": 1, "title": "Delay 2 hours"},
+        ...     detailed_report={"scores": {...}, "recovery_plan": {...}}
+        ... )
+        >>> response = await handle_save_decision(request)
+        >>> print(response.s3_key)
+        agent-decisions/2026/02/04/10-30-45/EY123_DISR-2026-001.json
+    """
+    logger.info(f"Saving agent decision for disruption {request.disruption_id}")
+
+    try:
+        result = await store_agent_decision(
+            disruption_id=request.disruption_id,
+            flight_number=request.flight_number,
+            disruption_type=request.disruption_type,
+            selected_solution=request.selected_solution,
+            detailed_report=request.detailed_report,
+            session_id=request.session_id
+        )
+
+        if result.get("success"):
+            return SolutionSelectionResponse(
+                status="success",
+                message="Agent decision saved to S3 for historical learning",
+                s3_key=result.get("s3_key")
+            )
+        else:
+            return SolutionSelectionResponse(
+                status="error",
+                message=f"Failed to save decision: {result.get('error', 'Unknown error')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error saving agent decision: {e}", exc_info=True)
+        return SolutionSelectionResponse(
+            status="error",
+            message=f"Failed to save decision: {str(e)}"
+        )
+
+
+async def handle_override_submission(request: OverrideSubmissionRequest) -> SolutionSelectionResponse:
+    """
+    Handle human override submission - stores override directive to S3.
+
+    This endpoint is called by the frontend when a human operator
+    rejects all AI-generated solutions and provides their own directive.
+
+    Args:
+        request: Override submission request with directive text
+
+    Returns:
+        Response with status and S3 storage location
+
+    Example:
+        >>> request = OverrideSubmissionRequest(
+        ...     disruption_id="DISR-2026-002",
+        ...     flight_number="EY456",
+        ...     override_text="Prioritize crew rest at outstation...",
+        ...     rejected_solutions=[{"solution_id": 1, "title": "Delay"}]
+        ... )
+        >>> response = await handle_override_submission(request)
+        >>> print(response.s3_key)
+        human-overrides/2026/02/04/11-45-22/EY456_DISR-2026-002.json
+    """
+    logger.info(f"Saving human override for disruption {request.disruption_id}")
+
+    try:
+        result = await store_human_override(
+            disruption_id=request.disruption_id,
+            flight_number=request.flight_number,
+            disruption_type=request.disruption_type,
+            override_directive=request.override_text,
+            rejected_solutions=request.rejected_solutions,
+            session_id=request.session_id,
+            context=request.context
+        )
+
+        if result.get("success"):
+            return SolutionSelectionResponse(
+                status="success",
+                message="Human override saved to S3 for historical learning",
+                s3_key=result.get("s3_key")
+            )
+        else:
+            return SolutionSelectionResponse(
+                status="error",
+                message=f"Failed to save override: {result.get('error', 'Unknown error')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error saving human override: {e}", exc_info=True)
+        return SolutionSelectionResponse(
+            status="error",
+            message=f"Failed to save override: {str(e)}"
+        )
+
+
 def get_disruption_status(disruption_id: str) -> Dict[str, Any]:
     """
     Get the status of a disruption and its arbitrator output.
-    
+
     Args:
         disruption_id: Unique identifier for the disruption
-        
+
     Returns:
         Disruption status and solution options
-        
+
     Raises:
         ValueError: If disruption not found
     """
     arbitrator_output = get_arbitrator_output(disruption_id)
-    
+
     if not arbitrator_output:
         raise ValueError(f"Disruption {disruption_id} not found")
-    
+
     return {
         "disruption_id": disruption_id,
         "timestamp": arbitrator_output.timestamp,
@@ -242,12 +404,40 @@ def health_check() -> Dict[str, Any]:
 # FastAPI integration (optional - only if FastAPI is installed)
 try:
     from fastapi import APIRouter, HTTPException
-    
+
     router = APIRouter()
-    
+
+    @router.post("/api/v1/save-decision", response_model=SolutionSelectionResponse)
+    async def save_decision(request: SaveDecisionRequest):
+        """
+        Save agent decision with detailed report to S3.
+
+        Called when user selects a solution and recovery is executed.
+        Stores to: agent-decisions/YYYY/MM/DD/HH-MM-SS/{flight}_{disruption_id}.json
+        """
+        try:
+            return await handle_save_decision(request)
+        except Exception as e:
+            logger.error(f"Failed to save decision: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/api/v1/submit-override", response_model=SolutionSelectionResponse)
+    async def submit_override(request: OverrideSubmissionRequest):
+        """
+        Submit human override directive to S3.
+
+        Called when user rejects AI solutions and provides manual directive.
+        Stores to: human-overrides/YYYY/MM/DD/HH-MM-SS/{flight}_{disruption_id}.json
+        """
+        try:
+            return await handle_override_submission(request)
+        except Exception as e:
+            logger.error(f"Failed to save override: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
     @router.post("/api/select-solution", response_model=SolutionSelectionResponse)
     async def select_solution(request: SolutionSelectionRequest):
-        """FastAPI endpoint for solution selection."""
+        """Legacy FastAPI endpoint for solution selection (uses in-memory cache)."""
         try:
             return await handle_solution_selection(request)
         except ValueError as e:
@@ -255,7 +445,7 @@ try:
         except Exception as e:
             logger.error(f"Failed to record solution selection: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @router.get("/api/disruption/{disruption_id}")
     async def get_disruption(disruption_id: str):
         """FastAPI endpoint for getting disruption status."""
@@ -263,14 +453,14 @@ try:
             return get_disruption_status(disruption_id)
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
-    
+
     @router.get("/api/health")
     async def health():
         """FastAPI health check endpoint."""
         return health_check()
-    
-    logger.info("FastAPI router initialized")
-    
+
+    logger.info("FastAPI router initialized with save-decision and submit-override endpoints")
+
 except ImportError:
     logger.info("FastAPI not installed - using standalone functions only")
     router = None

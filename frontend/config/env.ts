@@ -11,6 +11,8 @@ export interface EnvironmentConfig {
     apiTimeout: number;
     isDevelopment: boolean;
     enableMock: boolean;
+    mockFallbackTimeout: number; // Timeout in seconds before falling back to mock data
+    useMockFallback: boolean; // Enable/disable mock fallback feature
 }
 
 /**
@@ -56,19 +58,25 @@ export function validateConfig(config: Partial<EnvironmentConfig>): void {
 
 /**
  * Loads environment configuration from Vite environment variables
- * 
+ *
  * Required variables:
  * - VITE_API_ENDPOINT: The API Gateway endpoint URL (or relative path for dev proxy)
  * - VITE_AWS_REGION: The AWS region (defaults to us-east-1)
- * 
+ *
  * Optional variables:
  * - VITE_API_TIMEOUT: API request timeout in seconds (defaults to 120)
  * - VITE_ENABLE_MOCK: Enable mock mode for testing (defaults to false)
+ * - VITE_MOCK_FALLBACK_TIMEOUT: Timeout in seconds before falling back to mock data (defaults to 60)
+ * - VITE_USE_MOCK_FALLBACK: Enable mock fallback feature (defaults to false)
  */
 export function loadConfig(): EnvironmentConfig {
     const timeoutSeconds = import.meta.env.VITE_API_TIMEOUT
         ? parseInt(import.meta.env.VITE_API_TIMEOUT, 10)
         : 120;
+
+    const mockFallbackSeconds = import.meta.env.VITE_MOCK_FALLBACK_TIMEOUT
+        ? parseInt(import.meta.env.VITE_MOCK_FALLBACK_TIMEOUT, 10)
+        : 60;
 
     const config: Partial<EnvironmentConfig> = {
         apiEndpoint: import.meta.env.VITE_API_ENDPOINT,
@@ -76,6 +84,8 @@ export function loadConfig(): EnvironmentConfig {
         apiTimeout: timeoutSeconds * 1000, // Convert to milliseconds
         isDevelopment: import.meta.env.DEV === true,
         enableMock: import.meta.env.VITE_ENABLE_MOCK === 'true',
+        mockFallbackTimeout: mockFallbackSeconds * 1000, // Convert to milliseconds
+        useMockFallback: import.meta.env.VITE_USE_MOCK_FALLBACK === 'true',
     };
 
     // Validate configuration

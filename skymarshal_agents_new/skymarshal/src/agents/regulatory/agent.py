@@ -10,13 +10,11 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    CREW_ROSTER_TABLE,
-    MAINTENANCE_WORK_ORDERS_TABLE,
-    WEATHER_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     AIRCRAFT_REGISTRATION_INDEX,
+    SLOT_AIRPORT_INDEX,
 )
 from agents.schemas import FlightInfo, RegulatoryOutput
 
@@ -26,22 +24,11 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """
 <role>regulatory</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight_regulatory, query_weather_forecast, query_notams, query_curfew_status)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY regulatory data not returned by tools
-- Use your general LLM knowledge to fill in missing NOTAM, curfew, slot, or weather data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up NOTAM numbers, curfew times, slot allocations, weather minimums, or airspace restrictions
-- Guess regulatory compliance status, permit requirements, or bilateral agreement terms when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY COMPROMISES REGULATORY COMPLIANCE AND FLIGHT SAFETY.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="binding">notams, curfews, slots, weather_minimums, airspace_restrictions</constraints>
 
@@ -137,11 +124,11 @@ def query_flight_regulatory(flight_number: str, date: str) -> str:
     try:
         import json
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
 
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={":fn": flight_number, ":sd": date},
         )
         items = response.get("Items", [])
@@ -174,7 +161,7 @@ def query_weather_forecast(airport_code: str, forecast_time: str) -> str:
     try:
         import json
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        weather_table = dynamodb.Table(WEATHER_TABLE)
+        weather_table = dynamodb.Table(get_table_name("weather"))
 
         response = weather_table.get_item(
             Key={"airport_code": airport_code, "forecast_time": forecast_time}
@@ -215,43 +202,109 @@ def query_notams(airport_code: str) -> str:
 
 @tool
 def query_curfew_status(airport_code: str, arrival_time_utc: str) -> str:
-    """Check curfew compliance for arrival time.
+    """Check curfew compliance for arrival time by querying airport_curfews_v2 table.
 
     Args:
-        airport_code: Airport ICAO code (e.g., EGLL)
+        airport_code: Airport IATA code (e.g., LHR) or ICAO code (e.g., EGLL)
         arrival_time_utc: Arrival time in ISO format UTC
 
     Returns:
-        JSON string with curfew compliance status
+        JSON string with curfew compliance status from database
     """
-    import json
-    from datetime import datetime as dt
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        curfews_table = dynamodb.Table(get_table_name("airport_curfews"))
 
-    # Curfew database (would be in DynamoDB in production)
-    curfews = {
-        "EGLL": {"start": "23:00", "end": "06:00", "timezone": "Europe/London"},
-        "EDDF": {"start": "23:00", "end": "05:00", "timezone": "Europe/Berlin"},
-        "LFPG": {"start": "23:30", "end": "06:00", "timezone": "Europe/Paris"},
-    }
+        # Query by airport code
+        response = curfews_table.get_item(Key={"airport_code": airport_code})
 
-    if airport_code not in curfews:
+        if "Item" not in response:
+            # No curfew record means no restrictions
+            return json.dumps({
+                "airport": airport_code,
+                "curfew": "NONE",
+                "compliance": "COMPLIANT",
+                "message": "No curfew restrictions found for this airport",
+                "data_source": "airport_curfews_v2"
+            })
+
+        curfew = response["Item"]
         return json.dumps({
             "airport": airport_code,
-            "curfew": "NONE",
-            "compliance": "COMPLIANT",
-            "message": "No curfew restrictions at this airport"
+            "curfew_start_local": curfew.get("curfew_start", "N/A"),
+            "curfew_end_local": curfew.get("curfew_end", "N/A"),
+            "timezone": curfew.get("timezone", "UTC"),
+            "arrival_utc": arrival_time_utc,
+            "curfew_type": curfew.get("curfew_type", "STANDARD"),
+            "exceptions": curfew.get("exceptions", []),
+            "compliance": "CHECK_REQUIRED",
+            "message": "Convert UTC to local time and verify against curfew window",
+            "data_source": "airport_curfews_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying curfew status: {e}")
+        return json.dumps({
+            "error": type(e).__name__,
+            "message": f"Failed to query curfew data: {str(e)}",
+            "airport": airport_code
         })
 
-    curfew = curfews[airport_code]
-    return json.dumps({
-        "airport": airport_code,
-        "curfew_start_local": curfew["start"],
-        "curfew_end_local": curfew["end"],
-        "timezone": curfew["timezone"],
-        "arrival_utc": arrival_time_utc,
-        "compliance": "CHECK_REQUIRED",
-        "message": "Convert UTC to local time and verify against curfew window"
-    })
+
+@tool
+def query_airport_slots(airport_code: str, flight_date: str) -> str:
+    """Query airport slot availability for coordinated airports (Level 3).
+
+    Args:
+        airport_code: Airport IATA code (e.g., LHR, CDG, FRA)
+        flight_date: Date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        JSON string with slot availability and coordination requirements
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        slots_table = dynamodb.Table(get_table_name("airport_slots"))
+
+        # Query slots by airport and date using GSI
+        response = slots_table.query(
+            IndexName=SLOT_AIRPORT_INDEX,
+            KeyConditionExpression="airport_code = :ac",
+            FilterExpression="slot_date = :sd",
+            ExpressionAttributeValues={
+                ":ac": airport_code,
+                ":sd": flight_date
+            }
+        )
+
+        items = response.get("Items", [])
+
+        if not items:
+            return json.dumps({
+                "airport": airport_code,
+                "date": flight_date,
+                "coordination_level": "UNKNOWN",
+                "slots": [],
+                "message": "No slot data found - check if airport requires slot coordination",
+                "data_source": "airport_slots_v2"
+            })
+
+        return json.dumps({
+            "airport": airport_code,
+            "date": flight_date,
+            "slots": items,
+            "total_slots": len(items),
+            "data_source": "airport_slots_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying airport slots: {e}")
+        return json.dumps({
+            "error": type(e).__name__,
+            "message": f"Failed to query slot data: {str(e)}",
+            "airport": airport_code,
+            "date": flight_date
+        })
 
 
 async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
@@ -311,7 +364,8 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_flight_regulatory,
             query_weather_forecast,
             query_notams,
-            query_curfew_status
+            query_curfew_status,
+            query_airport_slots
         ]
 
         # Build optimized user message (SYSTEM_PROMPT sent separately as system role)
@@ -328,9 +382,10 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
 <action>
 1. query_flight_regulatory("{flight_info.flight_number}", "{flight_info.date}")
 2. query_notams(destination_icao)
-3. query_curfew_status(destination_icao, arrival_utc)
-4. Assess NOTAMs, curfews, slots, weather minimums
-5. Return AgentResponse with binding_constraints
+3. query_curfew_status(destination_iata, arrival_utc)
+4. query_airport_slots(destination_iata, "{flight_info.date}")
+5. Assess NOTAMs, curfews, slots, weather minimums
+6. Return AgentResponse with binding_constraints
 </action>"""
 
         else:  # revision phase
@@ -372,7 +427,7 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
                 system_prompt=SYSTEM_PROMPT,
                 user_message=user_message,
                 tools=mcp_tools + db_tools,
-                max_iterations=5
+                max_iterations=7  # Increased from 5 to allow more tool calls
             )
         except Exception as e:
             error_type = type(e).__name__
@@ -437,7 +492,7 @@ async def analyze_regulatory(payload: dict, llm: Any, mcp_tools: list) -> dict:
         response["timestamp"] = datetime.now(timezone.utc).isoformat()
         response["status"] = "success"
         response["binding_constraints"] = response.get("binding_constraints", [])
-        response["data_sources"] = response.get("data_sources", ["DynamoDB queries"])
+        response["data_sources"] = response.get("data_sources", ["flights_v2", "weather_v2", "airport_curfews_v2", "airport_slots_v2"])
 
         end_time = datetime.now(timezone.utc)
         response["duration_seconds"] = (end_time - start_time).total_seconds()

@@ -10,12 +10,15 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    AIRCRAFT_AVAILABILITY_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     AIRCRAFT_REGISTRATION_INDEX,
     AIRCRAFT_ROTATION_INDEX,
+    ROUTE_INDEX,
+    SLOT_AIRPORT_INDEX,
+    MCT_AIRPORT_CONNECTION_INDEX,
+    PARTNER_AIRLINE_INDEX,
 )
 from agents.schemas import FlightInfo, AgentResponse, NetworkOutput
 
@@ -52,13 +55,13 @@ def query_flight(flight_number: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         logger.info(f"Querying flight: {flight_number} on {date}")
         
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={
                 ":fn": flight_number,
                 ":sd": date,
@@ -96,13 +99,13 @@ def query_aircraft_rotation(aircraft_registration: str, start_date: str, end_dat
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         logger.info(f"Querying aircraft rotation: {aircraft_registration} from {start_date} to {end_date}")
         
         response = flights_table.query(
             IndexName=AIRCRAFT_ROTATION_INDEX,
-            KeyConditionExpression="aircraft_registration = :ar AND scheduled_departure BETWEEN :start AND :end",
+            KeyConditionExpression="aircraft_registration = :ar AND scheduled_departure_utc BETWEEN :start AND :end",
             ExpressionAttributeValues={
                 ":ar": aircraft_registration,
                 ":start": start_date,
@@ -111,8 +114,8 @@ def query_aircraft_rotation(aircraft_registration: str, start_date: str, end_dat
         )
         
         items = response.get("Items", [])
-        # Sort by scheduled_departure to ensure correct rotation order
-        items.sort(key=lambda x: x.get("scheduled_departure", ""))
+        # Sort by scheduled_departure_utc to ensure correct rotation order
+        items.sort(key=lambda x: x.get("scheduled_departure_utc", ""))
         
         logger.info(f"Found {len(items)} flights in rotation for {aircraft_registration}")
         return json.dumps(items, default=str)
@@ -137,7 +140,7 @@ def query_flights_by_aircraft(aircraft_registration: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         logger.info(f"Querying flights for aircraft: {aircraft_registration}")
         
@@ -174,7 +177,7 @@ def query_aircraft_availability(aircraft_registration: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        availability_table = dynamodb.Table(AIRCRAFT_AVAILABILITY_TABLE)
+        availability_table = dynamodb.Table(get_table_name("aircraft"))
         
         logger.info(f"Querying aircraft availability: {aircraft_registration} on {date}")
         
@@ -201,26 +204,194 @@ def query_aircraft_availability(aircraft_registration: str, date: str) -> str:
         return json.dumps({"error": type(e).__name__, "message": str(e)})
 
 
+@tool
+def query_oal_flights(origin: str, destination: str, date: str) -> str:
+    """Query Other Airline (OAL) flights for rebooking alternatives.
+
+    This tool retrieves available flights from interline partner airlines
+    for passenger rebooking options.
+
+    Args:
+        origin: Origin airport IATA code (e.g., AUH, LHR)
+        destination: Destination airport IATA code
+        date: Flight date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        JSON string containing list of OAL flight options or error
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        oal_table = dynamodb.Table(get_table_name("oal_flights"))
+
+        logger.info(f"Querying OAL flights: {origin} → {destination} on {date}")
+
+        response = oal_table.query(
+            IndexName=ROUTE_INDEX,
+            KeyConditionExpression="origin = :o AND destination = :d",
+            FilterExpression="flight_date = :fd",
+            ExpressionAttributeValues={
+                ":o": origin,
+                ":d": destination,
+                ":fd": date
+            }
+        )
+
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} OAL flights for {origin}-{destination}")
+        return json.dumps({
+            "origin": origin,
+            "destination": destination,
+            "date": date,
+            "oal_flights": items,
+            "total_options": len(items),
+            "data_source": "oal_flights_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying OAL flights: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_airport_slots(airport_code: str, flight_date: str) -> str:
+    """Query airport slot availability at coordinated airports.
+
+    This tool retrieves slot information for Level 3 coordinated airports
+    (LHR, FRA, CDG, etc.) where slots are required.
+
+    Args:
+        airport_code: Airport IATA code
+        flight_date: Date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        JSON string containing slot availability data
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        slots_table = dynamodb.Table(get_table_name("airport_slots"))
+
+        logger.info(f"Querying airport slots: {airport_code} on {flight_date}")
+
+        response = slots_table.query(
+            IndexName=SLOT_AIRPORT_INDEX,
+            KeyConditionExpression="airport_code = :ac",
+            FilterExpression="slot_date = :sd",
+            ExpressionAttributeValues={
+                ":ac": airport_code,
+                ":sd": flight_date
+            }
+        )
+
+        items = response.get("Items", [])
+        logger.info(f"Found {len(items)} slots at {airport_code}")
+        return json.dumps({
+            "airport_code": airport_code,
+            "date": flight_date,
+            "slots": items,
+            "total_slots": len(items),
+            "data_source": "airport_slots_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying airport slots: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_minimum_connection_times(airport_code: str, connection_type: str) -> str:
+    """Query minimum connection times (MCT) at an airport.
+
+    This tool retrieves MCT requirements for validating connection feasibility.
+
+    Args:
+        airport_code: Airport IATA code
+        connection_type: Connection type (e.g., "domestic", "international", "customs")
+
+    Returns:
+        JSON string containing MCT data
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        mct_table = dynamodb.Table(get_table_name("minimum_connection_times"))
+
+        logger.info(f"Querying MCT: {airport_code} / {connection_type}")
+
+        response = mct_table.get_item(
+            Key={"airport_code": airport_code, "connection_type": connection_type}
+        )
+
+        item = response.get("Item")
+        if item:
+            logger.info(f"Found MCT for {airport_code}/{connection_type}")
+            return json.dumps(item, default=str)
+        else:
+            return json.dumps({
+                "airport_code": airport_code,
+                "connection_type": connection_type,
+                "mct_minutes": 60,  # Default MCT
+                "message": "Using default MCT - no specific data found",
+                "data_source": "minimum_connection_times_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying MCT: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_interline_agreements(partner_airline: str) -> str:
+    """Query interline agreement details with partner airline.
+
+    This tool retrieves interline partnership capabilities for rebooking.
+
+    Args:
+        partner_airline: Partner airline IATA code (e.g., LH, BA, QR)
+
+    Returns:
+        JSON string containing interline agreement details
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        agreements_table = dynamodb.Table(get_table_name("interline_agreements"))
+
+        logger.info(f"Querying interline agreement with: {partner_airline}")
+
+        response = agreements_table.query(
+            IndexName=PARTNER_AIRLINE_INDEX,
+            KeyConditionExpression="partner_airline = :pa",
+            ExpressionAttributeValues={":pa": partner_airline}
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found interline agreement with {partner_airline}")
+            return json.dumps({
+                "partner_airline": partner_airline,
+                "agreements": items,
+                "data_source": "interline_agreements_v2"
+            }, default=str)
+        else:
+            return json.dumps({
+                "partner_airline": partner_airline,
+                "agreements": [],
+                "message": "No interline agreement found",
+                "data_source": "interline_agreements_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying interline agreements: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
 # System Prompt for Network Agent - OPTIMIZED for A2A Communication
 SYSTEM_PROMPT = """
 <role>network</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_aircraft_rotation, query_flights_by_aircraft, query_aircraft_availability)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY network or rotation data not returned by tools
-- Use your general LLM knowledge to fill in missing flight schedules, rotations, or availability data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up flight connections, downstream impacts, aircraft positions, or swap options
-- Guess propagation effects, connection times, or hub bank schedules when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY MAY RESULT IN INCORRECT NETWORK IMPACT ASSESSMENT.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="advisory">aircraft_rotation, connection_protection, hub_operations</constraints>
 
@@ -322,6 +493,10 @@ async def analyze_network(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_aircraft_rotation,
             query_flights_by_aircraft,
             query_aircraft_availability,
+            query_oal_flights,
+            query_airport_slots,
+            query_minimum_connection_times,
+            query_interline_agreements,
         ]
         
         # Get user prompt from payload

@@ -10,15 +10,16 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    BOOKINGS_TABLE,
-    CARGO_FLIGHT_ASSIGNMENTS_TABLE,
-    MAINTENANCE_WORK_ORDERS_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     FLIGHT_ID_INDEX,
     FLIGHT_LOADING_INDEX,
     AIRCRAFT_REGISTRATION_INDEX,
+    CATEGORY_INDEX,
+    SCENARIO_TYPE_INDEX,
+    REGULATION_INDEX,
+    FIRST_LEG_FLIGHT_INDEX,
 )
 from agents.schemas import FlightInfo, AgentResponse, FinanceOutput
 
@@ -58,13 +59,13 @@ def query_flight(flight_number: str, date: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
         
         logger.info(f"Querying flight: {flight_number} on {date}")
         
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={
                 ":fn": flight_number,
                 ":sd": date,
@@ -86,71 +87,77 @@ def query_flight(flight_number: str, date: str) -> str:
 
 @tool
 def query_passenger_bookings(flight_id: str) -> str:
-    """Query passenger bookings for a flight using GSI.
-    
-    This tool retrieves all passenger bookings for a specific flight using the
-    flight-id-index GSI. Returns booking records with fare and class information.
-    
+    """Query passengers for a flight using V2 passengers table with first-leg-flight-index GSI.
+
+    This tool retrieves all passengers for a specific flight using the
+    first-leg-flight-index GSI on passengers_v2. Returns passenger records with
+    fare class, PNR, and frequent flyer information for revenue calculations.
+
     Args:
-        flight_id: Unique flight identifier (e.g., EY123-20260120)
-    
+        flight_id: Unique flight identifier (e.g., "FLT-2001")
+
     Returns:
-        JSON string containing list of booking records
+        JSON string containing list of passenger records
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
-        
-        logger.info(f"Querying passenger bookings for flight: {flight_id}")
-        
-        response = bookings_table.query(
-            IndexName=FLIGHT_ID_INDEX,
-            KeyConditionExpression="flight_id = :fid",
+        # Use passengers_v2 table with first-leg-flight-index GSI
+        # V1 bookings table uses numeric flight_id, V2 uses string format
+        passengers_table = dynamodb.Table(get_table_name("passengers"))
+
+        logger.info(f"Querying passengers for flight: {flight_id}")
+
+        response = passengers_table.query(
+            IndexName=FIRST_LEG_FLIGHT_INDEX,
+            KeyConditionExpression="first_leg_flight_id = :fid",
             ExpressionAttributeValues={
                 ":fid": flight_id,
             },
         )
-        
+
         items = response.get("Items", [])
-        logger.info(f"Found {len(items)} bookings for flight {flight_id}")
+        logger.info(f"Found {len(items)} passengers for flight {flight_id}")
         return json.dumps(items, default=str)
-        
+
     except Exception as e:
-        logger.error(f"Error querying passenger bookings: {e}")
+        logger.error(f"Error querying passengers: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
 
 
 @tool
 def query_cargo_revenue(flight_id: str) -> str:
-    """Query cargo assignments for revenue calculation using GSI.
-    
-    This tool retrieves all cargo assignments for a specific flight using the
-    flight-loading-index GSI. Returns cargo assignments with weight and value data.
-    
+    """Query cargo shipments for revenue calculation using V2 table with first-leg-flight-index GSI.
+
+    This tool retrieves all cargo shipments for a specific flight using the
+    first-leg-flight-index GSI on cargo_shipments_v2. Returns shipment records
+    with weight, value, and special handling data for revenue calculations.
+
     Args:
-        flight_id: Unique flight identifier (e.g., EY123-20260120)
-    
+        flight_id: Unique flight identifier (e.g., "FLT-2001")
+
     Returns:
-        JSON string containing list of cargo assignment records
+        JSON string containing list of cargo shipment records
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        cargo_table = dynamodb.Table(CARGO_FLIGHT_ASSIGNMENTS_TABLE)
-        
+        # Use cargo_shipments_v2 table with first-leg-flight-index GSI
+        # V1 CargoFlightAssignments uses numeric flight_id, V2 uses string format
+        shipments_table = dynamodb.Table(get_table_name("cargo_shipments"))
+
         logger.info(f"Querying cargo revenue for flight: {flight_id}")
-        
-        response = cargo_table.query(
-            IndexName=FLIGHT_LOADING_INDEX,
-            KeyConditionExpression="flight_id = :fid",
+
+        response = shipments_table.query(
+            IndexName=FIRST_LEG_FLIGHT_INDEX,
+            KeyConditionExpression="first_leg_flight_id = :fid",
             ExpressionAttributeValues={
                 ":fid": flight_id,
             },
         )
-        
+
         items = response.get("Items", [])
-        logger.info(f"Found {len(items)} cargo assignments for flight {flight_id}")
+        logger.info(f"Found {len(items)} cargo shipments for flight {flight_id}")
         return json.dumps(items, default=str)
-        
+
     except Exception as e:
         logger.error(f"Error querying cargo revenue: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
@@ -171,7 +178,7 @@ def query_maintenance_costs(aircraft_registration: str) -> str:
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        maintenance_table = dynamodb.Table(MAINTENANCE_WORK_ORDERS_TABLE)
+        maintenance_table = dynamodb.Table(get_table_name("maintenance_work_orders"))
         
         logger.info(f"Querying maintenance costs for aircraft: {aircraft_registration}")
         
@@ -195,13 +202,13 @@ def query_maintenance_costs(aircraft_registration: str) -> str:
 @tool
 def get_current_datetime_tool() -> str:
     """Returns current UTC datetime for date resolution.
-    
+
     Use this tool when you need to resolve relative dates like 'yesterday',
     'today', or 'tomorrow', or when you need the current date/time for context.
-    
+
     Returns:
         str: Current UTC datetime in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
-    
+
     Example:
         >>> current_time = get_current_datetime_tool()
         >>> print(current_time)
@@ -209,26 +216,159 @@ def get_current_datetime_tool() -> str:
     """
     return datetime.now(timezone.utc).isoformat()
 
+
+@tool
+def query_financial_parameters(parameter_type: str) -> str:
+    """Query financial parameters for cost calculations.
+
+    This tool retrieves financial parameters such as crew overtime rates,
+    fuel costs, compensation rates, and other cost factors from the
+    financial_parameters_v2 table.
+
+    Args:
+        parameter_type: Type of parameter (e.g., "crew_costs", "fuel_rates",
+                       "compensation_rates", "hotel_rates", "meal_rates")
+
+    Returns:
+        JSON string containing financial parameters or error
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        params_table = dynamodb.Table(get_table_name("financial_parameters"))
+
+        logger.info(f"Querying financial parameters: {parameter_type}")
+
+        # Table PK is parameter_id, not parameter_type
+        # Use scan with filter since there's no GSI for parameter_type
+        response = params_table.scan(
+            FilterExpression="parameter_type = :pt",
+            ExpressionAttributeValues={":pt": parameter_type}
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found financial parameters for {parameter_type}")
+            return json.dumps(items[0], default=str)
+        else:
+            logger.warning(f"Financial parameters not found for {parameter_type}")
+            return json.dumps({
+                "error": "PARAMETERS_NOT_FOUND",
+                "message": f"Financial parameters for {parameter_type} not found",
+                "parameter_type": parameter_type,
+                "data_source": "financial_parameters_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying financial parameters: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_recovery_cost_matrix(scenario_type: str, aircraft_type: str) -> str:
+    """Query cost matrix for recovery scenarios.
+
+    This tool retrieves cost data for different recovery scenarios
+    (delay, cancel, swap) by aircraft type from recovery_cost_matrix_v2.
+
+    Args:
+        scenario_type: Recovery scenario type (e.g., "DELAY", "CANCEL", "SWAP")
+        aircraft_type: Aircraft type code (e.g., "B787", "A380", "A350")
+
+    Returns:
+        JSON string containing cost matrix data or error
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        cost_table = dynamodb.Table(get_table_name("recovery_cost_matrix"))
+
+        logger.info(f"Querying recovery cost matrix: {scenario_type} for {aircraft_type}")
+
+        # Table PK is matrix_id, use scenario-type-index GSI with filter on aircraft_type
+        response = cost_table.query(
+            IndexName=SCENARIO_TYPE_INDEX,
+            KeyConditionExpression="scenario_type = :st",
+            FilterExpression="aircraft_type = :at",
+            ExpressionAttributeValues={
+                ":st": scenario_type,
+                ":at": aircraft_type
+            }
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found cost matrix for {scenario_type}/{aircraft_type}")
+            return json.dumps(items[0], default=str)
+        else:
+            logger.warning(f"Cost matrix not found for {scenario_type}/{aircraft_type}")
+            return json.dumps({
+                "error": "COST_MATRIX_NOT_FOUND",
+                "message": f"No cost matrix for scenario {scenario_type} and aircraft {aircraft_type}",
+                "data_source": "recovery_cost_matrix_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying recovery cost matrix: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_compensation_rules(regulation: str, delay_category: str) -> str:
+    """Query compensation rules by regulation and delay category.
+
+    This tool retrieves passenger compensation requirements based on
+    applicable regulation (EU261, DOT, etc.) and delay duration.
+
+    Args:
+        regulation: Regulatory framework (e.g., "EU261", "DOT", "GCAA")
+        delay_category: Delay category (e.g., "2-3h", "3-4h", ">4h", "cancellation")
+
+    Returns:
+        JSON string containing compensation rules or error
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        rules_table = dynamodb.Table(get_table_name("compensation_rules"))
+
+        logger.info(f"Querying compensation rules: {regulation} / {delay_category}")
+
+        # Use regulation-index GSI with filter on delay_category
+        # Table PK is rule_id, so we must use GSI for regulation lookup
+        response = rules_table.query(
+            IndexName=REGULATION_INDEX,
+            KeyConditionExpression="regulation = :reg",
+            FilterExpression="delay_category = :dc",
+            ExpressionAttributeValues={
+                ":reg": regulation,
+                ":dc": delay_category
+            }
+        )
+
+        items = response.get("Items", [])
+        if items:
+            logger.info(f"Found compensation rules for {regulation}/{delay_category}")
+            return json.dumps(items[0], default=str)
+        else:
+            logger.warning(f"Compensation rules not found for {regulation}/{delay_category}")
+            return json.dumps({
+                "error": "RULES_NOT_FOUND",
+                "message": f"No compensation rules for {regulation} at {delay_category}",
+                "data_source": "compensation_rules_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying compensation rules: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
 # System Prompt for Finance Agent - OPTIMIZED for A2A Communication
 SYSTEM_PROMPT = """
 <role>finance</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_passenger_bookings, query_cargo_revenue, query_maintenance_costs)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY financial data not returned by tools
-- Use your general LLM knowledge to fill in missing revenue, cost, or booking data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up ticket prices, passenger counts, cargo revenues, maintenance costs, or compensation amounts
-- Guess fare classes, booking statuses, or financial metrics when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY MAY RESULT IN INCORRECT FINANCIAL DECISIONS.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <constraints type="advisory">cost_optimization, revenue_protection, scenario_comparison</constraints>
 
@@ -320,6 +460,9 @@ async def analyze_finance(payload: dict, llm: Any, mcp_tools: list) -> dict:
             query_cargo_revenue,
             query_maintenance_costs,
             get_current_datetime_tool,
+            query_financial_parameters,
+            query_recovery_cost_matrix,
+            query_compensation_rules,
         ]
         
         # Get user prompt

@@ -7,11 +7,8 @@ from langchain_core.messages import HumanMessage
 
 from utils.tool_calling import invoke_with_tools
 from agents.schemas import GuestExperienceOutput, FlightInfo
+from database.table_config import get_table_name
 from database.constants import (
-    FLIGHTS_TABLE,
-    BOOKINGS_TABLE,
-    BAGGAGE_TABLE,
-    PASSENGERS_TABLE,
     FLIGHT_NUMBER_DATE_INDEX,
     FLIGHT_ID_INDEX,
     BOOKING_INDEX,
@@ -19,6 +16,9 @@ from database.constants import (
     FLIGHT_STATUS_INDEX,
     LOCATION_STATUS_INDEX,
     PASSENGER_ELITE_TIER_INDEX,
+    REGULATION_INDEX,
+    ROUTE_INDEX,
+    FIRST_LEG_FLIGHT_INDEX,
 )
 import logging
 from typing import Any, Optional
@@ -33,22 +33,11 @@ dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 SYSTEM_PROMPT = """
 <role>Guest Experience: assess passenger impact, compensation, reprotection options</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (query_flight, query_bookings_by_flight, query_passenger, query_baggage_by_booking, etc.)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in the user prompt
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY passenger data not returned by tools
-- Use your general LLM knowledge to fill in missing booking, loyalty, or baggage data
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up passenger names, booking references, loyalty tiers, compensation amounts, or rebooking options
-- Guess passenger counts, connection statuses, or special service requests when data is unavailable
-
-If required data is unavailable from tools: REPORT THE DATA GAP and return error status.
-VIOLATION OF THIS POLICY MAY RESULT IN INCORRECT PASSENGER HANDLING AND SERVICE FAILURES.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|user_prompt
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|return_error_status
+</DATA_POLICY>
 
 <workflow>
 1. Extract: flight_number, date, event from user prompt
@@ -151,11 +140,11 @@ def query_flight(flight_number: str, date: str) -> str:
         JSON string containing flight record or error
     """
     try:
-        flights_table = dynamodb.Table(FLIGHTS_TABLE)
+        flights_table = dynamodb.Table(get_table_name("flights"))
 
         response = flights_table.query(
             IndexName=FLIGHT_NUMBER_DATE_INDEX,
-            KeyConditionExpression="flight_number = :fn AND scheduled_departure = :sd",
+            KeyConditionExpression="flight_number = :fn AND begins_with(scheduled_departure_utc, :sd)",
             ExpressionAttributeValues={":fn": flight_number, ":sd": date},
         )
 
@@ -177,32 +166,35 @@ def query_flight(flight_number: str, date: str) -> str:
 
 @tool
 def query_bookings_by_flight(flight_id: str) -> str:
-    """Query all passenger bookings for a flight using GSI.
+    """Query all passengers for a flight using V2 passengers table with first-leg-flight-index GSI.
 
-    This tool retrieves all passenger bookings for a specific flight, including
-    passenger IDs, booking status, cabin class, and booking references.
+    This tool retrieves all passengers for a specific flight, including
+    passenger IDs, booking status, cabin class, PNR, and frequent flyer tier.
+    Uses passengers_v2 table with first-leg-flight-index GSI for proper V2 data access.
 
     Args:
-        flight_id: Unique flight identifier
+        flight_id: Unique flight identifier (e.g., "FLT-2001")
 
     Returns:
-        JSON string containing list of booking records
+        JSON string containing list of passenger records
     """
     try:
-        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+        # Use passengers_v2 table with first-leg-flight-index GSI
+        # V1 bookings table uses numeric flight_id, but V2 passengers_v2 uses string format
+        passengers_table = dynamodb.Table(get_table_name("passengers"))
 
-        response = bookings_table.query(
-            IndexName=FLIGHT_ID_INDEX,
-            KeyConditionExpression="flight_id = :fid",
+        response = passengers_table.query(
+            IndexName=FIRST_LEG_FLIGHT_INDEX,
+            KeyConditionExpression="first_leg_flight_id = :fid",
             ExpressionAttributeValues={":fid": flight_id},
         )
 
         items = _convert_decimals(response.get("Items", []))
-        logger.info(f"Found {len(items)} bookings for flight {flight_id}")
+        logger.info(f"Found {len(items)} passengers for flight {flight_id}")
         return json.dumps(items, default=str)
 
     except Exception as e:
-        logger.error(f"Error querying bookings for flight {flight_id}: {e}")
+        logger.error(f"Error querying passengers for flight {flight_id}: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
 
 
@@ -221,7 +213,7 @@ def query_bookings_by_passenger(passenger_id: str, flight_id: Optional[str] = No
         JSON string containing list of booking records
     """
     try:
-        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+        bookings_table = dynamodb.Table(get_table_name("bookings"))
 
         if flight_id:
             response = bookings_table.query(
@@ -260,7 +252,7 @@ def query_bookings_by_status(flight_id: str, booking_status: str) -> str:
         JSON string containing list of booking records
     """
     try:
-        bookings_table = dynamodb.Table(BOOKINGS_TABLE)
+        bookings_table = dynamodb.Table(get_table_name("bookings"))
 
         response = bookings_table.query(
             IndexName=FLIGHT_STATUS_INDEX,
@@ -295,7 +287,7 @@ def query_baggage_by_booking(booking_id: str) -> str:
         JSON string containing list of baggage records
     """
     try:
-        baggage_table = dynamodb.Table(BAGGAGE_TABLE)
+        baggage_table = dynamodb.Table(get_table_name("baggage"))
 
         response = baggage_table.query(
             IndexName=BOOKING_INDEX,
@@ -327,7 +319,7 @@ def query_baggage_by_location(current_location: str, baggage_status: Optional[st
         JSON string containing list of baggage records
     """
     try:
-        baggage_table = dynamodb.Table(BAGGAGE_TABLE)
+        baggage_table = dynamodb.Table(get_table_name("baggage"))
 
         if baggage_status:
             response = baggage_table.query(
@@ -371,7 +363,7 @@ def query_passenger(passenger_id: str) -> str:
         JSON string containing passenger record or error
     """
     try:
-        passengers_table = dynamodb.Table(PASSENGERS_TABLE)
+        passengers_table = dynamodb.Table(get_table_name("passengers"))
 
         response = passengers_table.get_item(Key={"passenger_id": passenger_id})
 
@@ -390,44 +382,140 @@ def query_passenger(passenger_id: str) -> str:
 
 
 @tool
-def query_elite_passengers(frequent_flyer_tier_id: str, booking_date_from: Optional[str] = None) -> str:
+def query_elite_passengers(frequent_flyer_tier: str, booking_date_from: Optional[str] = None) -> str:
     """Query passengers by elite tier using GSI (Priority 1).
 
     This tool retrieves passengers by frequent flyer tier, optionally filtered by
     booking date. Useful for identifying VIP passengers and elite status holders.
 
     Args:
-        frequent_flyer_tier_id: Tier identifier (e.g., "SILVER", "GOLD", "PLATINUM", "DIAMOND")
+        frequent_flyer_tier: Tier identifier (e.g., "SILVER", "GOLD", "PLATINUM", "DIAMOND")
         booking_date_from: Optional minimum booking date in ISO format (YYYY-MM-DD)
 
     Returns:
         JSON string containing list of passenger records
     """
     try:
-        passengers_table = dynamodb.Table(PASSENGERS_TABLE)
+        passengers_table = dynamodb.Table(get_table_name("passengers"))
 
         if booking_date_from:
             response = passengers_table.query(
                 IndexName=PASSENGER_ELITE_TIER_INDEX,
-                KeyConditionExpression="frequent_flyer_tier_id = :tier AND booking_date >= :date",
+                KeyConditionExpression="frequent_flyer_tier = :tier AND passenger_id >= :date",
                 ExpressionAttributeValues={
-                    ":tier": frequent_flyer_tier_id,
+                    ":tier": frequent_flyer_tier,
                     ":date": booking_date_from,
                 },
             )
         else:
             response = passengers_table.query(
                 IndexName=PASSENGER_ELITE_TIER_INDEX,
-                KeyConditionExpression="frequent_flyer_tier_id = :tier",
-                ExpressionAttributeValues={":tier": frequent_flyer_tier_id},
+                KeyConditionExpression="frequent_flyer_tier = :tier",
+                ExpressionAttributeValues={":tier": frequent_flyer_tier},
             )
 
         items = _convert_decimals(response.get("Items", []))
-        logger.info(f"Found {len(items)} passengers with tier {frequent_flyer_tier_id}")
+        logger.info(f"Found {len(items)} passengers with tier {frequent_flyer_tier}")
         return json.dumps(items, default=str)
 
     except Exception as e:
-        logger.error(f"Error querying elite passengers with tier {frequent_flyer_tier_id}: {e}")
+        logger.error(f"Error querying elite passengers with tier {frequent_flyer_tier}: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_compensation_rules(regulation: str, delay_category: str) -> str:
+    """Query compensation rules by regulation and delay category.
+
+    This tool retrieves passenger compensation requirements based on
+    applicable regulation (EU261, DOT, etc.) and delay duration.
+
+    Args:
+        regulation: Regulatory framework (e.g., "EU261", "DOT", "GCAA")
+        delay_category: Delay category (e.g., "2-3h", "3-4h", ">4h", "cancellation")
+
+    Returns:
+        JSON string containing compensation rules or error
+    """
+    try:
+        comp_table = dynamodb.Table(get_table_name("compensation_rules"))
+
+        logger.info(f"Querying compensation rules: {regulation} / {delay_category}")
+
+        # Use regulation-index GSI with filter on delay_category
+        # Table PK is rule_id, so we must use GSI for regulation lookup
+        response = comp_table.query(
+            IndexName=REGULATION_INDEX,
+            KeyConditionExpression="regulation = :reg",
+            FilterExpression="delay_category = :dc",
+            ExpressionAttributeValues={
+                ":reg": regulation,
+                ":dc": delay_category
+            }
+        )
+
+        items = response.get("Items", [])
+        if items:
+            result = _convert_decimals(items[0])
+            logger.info(f"Found compensation rules for {regulation}/{delay_category}")
+            return json.dumps(result, default=str)
+        else:
+            logger.warning(f"Compensation rules not found for {regulation}/{delay_category}")
+            return json.dumps({
+                "error": "RULES_NOT_FOUND",
+                "message": f"No compensation rules for {regulation} at {delay_category}",
+                "data_source": "compensation_rules_v2"
+            })
+
+    except Exception as e:
+        logger.error(f"Error querying compensation rules: {e}")
+        return json.dumps({"error": type(e).__name__, "message": str(e)})
+
+
+@tool
+def query_oal_flights(origin: str, destination: str, date: str) -> str:
+    """Query Other Airline (OAL) flights for rebooking passengers.
+
+    This tool retrieves available flights from interline partner airlines
+    for passenger rebooking options.
+
+    Args:
+        origin: Origin airport IATA code (e.g., AUH, LHR)
+        destination: Destination airport IATA code
+        date: Flight date in ISO format (YYYY-MM-DD)
+
+    Returns:
+        JSON string containing list of OAL flight options
+    """
+    try:
+        oal_table = dynamodb.Table(get_table_name("oal_flights"))
+
+        logger.info(f"Querying OAL flights: {origin} → {destination} on {date}")
+
+        response = oal_table.query(
+            IndexName=ROUTE_INDEX,
+            KeyConditionExpression="origin = :o AND destination = :d",
+            FilterExpression="flight_date = :fd",
+            ExpressionAttributeValues={
+                ":o": origin,
+                ":d": destination,
+                ":fd": date
+            }
+        )
+
+        items = _convert_decimals(response.get("Items", []))
+        logger.info(f"Found {len(items)} OAL flights for {origin}-{destination}")
+        return json.dumps({
+            "origin": origin,
+            "destination": destination,
+            "date": date,
+            "oal_flights": items,
+            "total_options": len(items),
+            "data_source": "oal_flights_v2"
+        }, default=str)
+
+    except Exception as e:
+        logger.error(f"Error querying OAL flights: {e}")
         return json.dumps({"error": type(e).__name__, "message": str(e)})
 
 
@@ -470,6 +558,8 @@ async def analyze_guest_experience(payload: dict, llm: Any, mcp_tools: list) -> 
             query_baggage_by_location,
             query_passenger,
             query_elite_passengers,
+            query_compensation_rules,
+            query_oal_flights,
         ]
 
         # Get user prompt from payload

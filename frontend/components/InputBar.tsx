@@ -71,7 +71,7 @@ export const InputBar: React.FC<InputBarProps> = ({
 
           {/* Right Action Cluster */}
           <div className="flex items-center gap-1 pb-1.5 pr-1.5">
-            {/* Mic Button */}
+            {/* Voice-to-text button - Commented out for demo
             <button
               onClick={toggleListening}
               disabled={disabled}
@@ -82,6 +82,7 @@ export const InputBar: React.FC<InputBarProps> = ({
               } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}>
               <Mic size={20} />
             </button>
+            */}
 
             {/* Process Button - Circular Icon Only */}
             <button
@@ -103,7 +104,7 @@ export const InputBar: React.FC<InputBarProps> = ({
         </div>
       </div>
 
-      {/* Helper Chips / Suggestions */}
+      {/* Example prompts - Commented out for cleaner UI
       <div className="mt-6 flex flex-wrap justify-center gap-3 animate-fade-in-up">
         <SuggestionChip
           label="EY551 LHR→AUH hydraulic issue"
@@ -139,6 +140,7 @@ export const InputBar: React.FC<InputBarProps> = ({
           disabled={disabled}
         />
       </div>
+      */}
     </div>
   );
 };

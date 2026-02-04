@@ -5,6 +5,10 @@ import { BrainCircuit, ChevronRight } from "lucide-react";
 import { ArbitratorPanel, Solution } from "./ArbitratorPanel";
 import { InvokeResponse } from "../services/api";
 import { ResponseMapper } from "../services/responseMapper";
+import { AsyncAPIService, SubmitOverrideRequest, SaveDecisionRequest } from "../services/apiAsync";
+
+// Initialize async API service for S3 storage
+const asyncAPIService = new AsyncAPIService();
 
 interface OrchestrationViewProps {
   prompt: string;
@@ -225,8 +229,10 @@ export default function OrchestrationView({
         // 3. Parse API response with audit_trail structure
         if (actualAssessment.audit_trail) {
           // NEW: Parse three-phase audit trail structure
+          // Pass final_decision to get recovery_plan data
           const parsed = ResponseMapper.parseAuditTrail(
             actualAssessment.audit_trail,
+            actualAssessment.final_decision,
           );
 
           // Display phase1 messages using dedicated function
@@ -321,8 +327,10 @@ export default function OrchestrationView({
 
       if (actualAssessment.audit_trail) {
         // Parse phase2_revision from the existing audit trail
+        // Pass final_decision to get recovery_plan data
         const parsed = ResponseMapper.parseAuditTrail(
           actualAssessment.audit_trail,
+          actualAssessment.final_decision,
         );
 
         console.log(
@@ -384,12 +392,20 @@ export default function OrchestrationView({
         isCrossImpactRound: true,
         isDecision: true,
         solutionTitle: sol.title,
+        selectedSolution: sol, // Pass the full solution object
       },
     ]);
     setArbitratorAnalysis(`EXECUTING: ${sol.title}`);
   };
 
-  const handleOverride = (text: string) => {
+  const handleUnselectSolution = () => {
+    setSelectedSolutionId(null);
+    // Remove the decision message from the thread
+    setMessages((prev) => prev.filter((msg) => !msg.isDecision));
+    setArbitratorAnalysis('Awaiting decision selection...');
+  };
+
+  const handleOverride = async (text: string) => {
     setSelectedSolutionId("override");
     setMessages((prev) => [
       ...prev,
@@ -403,6 +419,119 @@ export default function OrchestrationView({
       },
     ]);
     setArbitratorAnalysis("Processing Manual Directive...");
+
+    // Save override to S3
+    try {
+      // Extract flight number from prompt or use default
+      const flightMatch = prompt.match(/\b[A-Z]{2}\d{3,4}\b/);
+      const flightNumber = flightMatch ? flightMatch[0] : "UNKNOWN";
+
+      // Extract disruption type from prompt
+      let disruptionType = "unknown";
+      const promptLower = prompt.toLowerCase();
+      if (promptLower.includes("crew") || promptLower.includes("duty") || promptLower.includes("fdp")) {
+        disruptionType = "crew";
+      } else if (promptLower.includes("maintenance") || promptLower.includes("mechanical") || promptLower.includes("hydraulic")) {
+        disruptionType = "maintenance";
+      } else if (promptLower.includes("weather")) {
+        disruptionType = "weather";
+      } else if (promptLower.includes("regulatory") || promptLower.includes("curfew")) {
+        disruptionType = "regulatory";
+      }
+
+      const overrideRequest: SubmitOverrideRequest = {
+        disruption_id: `DISR-${Date.now()}`,
+        session_id: apiResponse?.session_id,
+        flight_number: flightNumber,
+        disruption_type: disruptionType,
+        override_text: text,
+        rejected_solutions: solutions.map(sol => ({
+          solution_id: sol.solution_id || 0,
+          title: sol.title,
+          composite_score: sol.composite_score
+        })),
+        context: {
+          original_prompt: prompt.substring(0, 500),
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      const result = await asyncAPIService.submitOverride(overrideRequest);
+
+      if (result.status === 'success') {
+        console.log('[OrchestrationView] Override saved to S3:', result.s3_key);
+      } else {
+        console.error('[OrchestrationView] Failed to save override:', result.message);
+      }
+    } catch (error) {
+      console.error('[OrchestrationView] Error saving override to S3:', error);
+    }
+  };
+
+  // Handle recovery completion - save decision to S3
+  const handleRecoveryComplete = async (solution: Solution) => {
+    try {
+      // Extract flight number from prompt or use default
+      const flightMatch = prompt.match(/\b[A-Z]{2}\d{3,4}\b/);
+      const flightNumber = flightMatch ? flightMatch[0] : "UNKNOWN";
+
+      // Extract disruption type from prompt
+      let disruptionType = "unknown";
+      const promptLower = prompt.toLowerCase();
+      if (promptLower.includes("crew") || promptLower.includes("duty") || promptLower.includes("fdp")) {
+        disruptionType = "crew";
+      } else if (promptLower.includes("maintenance") || promptLower.includes("mechanical") || promptLower.includes("hydraulic")) {
+        disruptionType = "maintenance";
+      } else if (promptLower.includes("weather")) {
+        disruptionType = "weather";
+      } else if (promptLower.includes("regulatory") || promptLower.includes("curfew")) {
+        disruptionType = "regulatory";
+      }
+
+      const saveRequest: SaveDecisionRequest = {
+        disruption_id: `DISR-${Date.now()}`,
+        session_id: apiResponse?.session_id,
+        flight_number: flightNumber,
+        disruption_type: disruptionType,
+        selected_solution: {
+          solution_id: solution.solution_id,
+          title: solution.title,
+          composite_score: solution.composite_score,
+          safety_score: solution.safety_score,
+          passenger_score: solution.passenger_score,
+          network_score: solution.network_score,
+          cost_score: solution.cost_score,
+          recommended: solution.recommended,
+        },
+        detailed_report: {
+          solution: solution,
+          scores: {
+            safety: solution.safety_score,
+            passenger: solution.passenger_score,
+            network: solution.network_score,
+            cost: solution.cost_score,
+            composite: solution.composite_score,
+          },
+          recovery_plan: solution.recovery_plan,
+          passenger_impact: solution.passenger_impact,
+          financial_impact: solution.financial_impact,
+          network_impact: solution.network_impact,
+          recommendations: solution.recommendations,
+          justification: solution.justification,
+          reasoning: solution.reasoning,
+        }
+      };
+
+      const result = await asyncAPIService.saveDecision(saveRequest);
+
+      if (result.status === 'success') {
+        console.log('[OrchestrationView] Decision saved to S3:', result.s3_key);
+      } else {
+        console.error('[OrchestrationView] Failed to save decision:', result.message);
+      }
+    } catch (error) {
+      console.error('[OrchestrationView] Error saving decision to S3:', error);
+    }
   };
 
   return (
@@ -449,7 +578,12 @@ export default function OrchestrationView({
 
           <div className="max-w-4xl mx-auto space-y-6">
             {messages.map((msg) => (
-              <AgentMessage key={msg.id} message={msg} isNew={true} />
+              <AgentMessage
+                key={msg.id}
+                message={msg}
+                isNew={true}
+                onRecoveryComplete={msg.isDecision ? handleRecoveryComplete : undefined}
+              />
             ))}
 
             {/* Thinking Indicator in Stream */}
@@ -496,7 +630,7 @@ export default function OrchestrationView({
                 className="group flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-full shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all duration-300 ring-4 ring-white/50">
                 <BrainCircuit size={20} className="text-sky-400" />
                 <span className="font-semibold text-lg">
-                  Run Cross-Impact Analysis
+                  Run Negotiation and Trade Off
                 </span>
                 <ChevronRight className="group-hover:translate-x-1 transition-transform" />
               </button>
@@ -512,6 +646,7 @@ export default function OrchestrationView({
           liveAnalysis={arbitratorAnalysis}
           solutions={solutions}
           onSelectSolution={handleSolutionSelect}
+          onUnselectSolution={handleUnselectSolution}
           onOverride={handleOverride}
           selectedSolutionId={selectedSolutionId}
         />

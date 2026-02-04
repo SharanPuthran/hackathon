@@ -25,10 +25,17 @@ from typing import Any, Dict
 import boto3
 from botocore.exceptions import ClientError
 
-from api.response_formatter import ResponseFormatter
-from api.session_manager import SessionManager
-from api.validation import RequestValidator
-from api.websocket_client import AgentCoreWebSocketClient
+from .response_formatter import ResponseFormatter
+from .session_manager import SessionManager
+from .validation import RequestValidator
+from .websocket_client import AgentCoreWebSocketClient
+# NOTE: Temporarily disabled - requires langchain dependencies not in Lambda package
+# from .endpoints import (
+#     SaveDecisionRequest,
+#     OverrideSubmissionRequest,
+#     handle_save_decision,
+#     handle_override_submission
+# )
 
 # Configure logging
 logging.basicConfig(level=os.getenv('LOG_LEVEL', 'INFO'))
@@ -100,17 +107,150 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     # Handle API Gateway requests
     path = event.get('path', '')
     http_method = event.get('httpMethod', '')
-    
+
     if path == '/api/v1/invoke' and http_method == 'POST':
         return handle_invoke_async(event, context)
     elif path.startswith('/api/v1/status/') and http_method == 'GET':
         request_id = path.split('/')[-1]
         return handle_status_check(request_id)
+    # NOTE: Temporarily disabled - requires langchain dependencies not in Lambda package
+    # elif path == '/api/v1/save-decision' and http_method == 'POST':
+    #     return handle_save_decision_route(event)
+    # elif path == '/api/v1/submit-override' and http_method == 'POST':
+    #     return handle_submit_override_route(event)
+    elif path in ['/api/v1/save-decision', '/api/v1/submit-override'] and http_method == 'POST':
+        return {
+            'statusCode': 503,
+            'headers': {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'},
+            'body': json.dumps({'status': 'error', 'message': 'S3 storage endpoints temporarily unavailable'})
+        }
     else:
         return {
             'statusCode': 404,
             'headers': {'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({'error': 'Not found'})
+        }
+
+
+def handle_save_decision_route(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle POST /api/v1/save-decision - Save agent decision to S3.
+
+    Args:
+        event: API Gateway event
+
+    Returns:
+        API Gateway response
+    """
+    try:
+        body = json.loads(event.get('body', '{}'))
+
+        # Validate required fields
+        required_fields = ['disruption_id', 'flight_number', 'selected_solution', 'detailed_report']
+        missing = [f for f in required_fields if f not in body]
+        if missing:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'status': 'error',
+                    'message': f'Missing required fields: {missing}'
+                })
+            }
+
+        # Create request object
+        request = SaveDecisionRequest(**body)
+
+        # Call async handler
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(handle_save_decision(request))
+
+        return {
+            'statusCode': 200 if result.status == 'success' else 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Methods': 'POST,OPTIONS'
+            },
+            'body': json.dumps(result.model_dump())
+        }
+
+    except json.JSONDecodeError:
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'status': 'error', 'message': 'Invalid JSON in request body'})
+        }
+    except Exception as e:
+        logger.exception("Error in save-decision route")
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'status': 'error', 'message': str(e)})
+        }
+
+
+def handle_submit_override_route(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle POST /api/v1/submit-override - Save human override to S3.
+
+    Args:
+        event: API Gateway event
+
+    Returns:
+        API Gateway response
+    """
+    try:
+        body = json.loads(event.get('body', '{}'))
+
+        # Validate required fields
+        if 'disruption_id' not in body or 'override_text' not in body:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'status': 'error',
+                    'message': 'Missing required fields: disruption_id, override_text'
+                })
+            }
+
+        # Create request object
+        request = OverrideSubmissionRequest(**body)
+
+        # Call async handler
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(handle_override_submission(request))
+
+        return {
+            'statusCode': 200 if result.status == 'success' else 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Methods': 'POST,OPTIONS'
+            },
+            'body': json.dumps(result.model_dump())
+        }
+
+    except json.JSONDecodeError:
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'status': 'error', 'message': 'Invalid JSON in request body'})
+        }
+    except Exception as e:
+        logger.exception("Error in submit-override route")
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'status': 'error', 'message': str(e)})
         }
 
 

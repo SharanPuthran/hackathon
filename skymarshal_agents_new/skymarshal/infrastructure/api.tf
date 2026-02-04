@@ -145,6 +145,21 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:HeadObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::skymarshal-prod-decisions-368613657554",
+          "arn:aws:s3:::skymarshal-prod-decisions-368613657554/*",
+          "arn:aws:s3:::skymarshal-prod-knowledge-base-368613657554",
+          "arn:aws:s3:::skymarshal-prod-knowledge-base-368613657554/*"
+        ]
       }
     ]
   })
@@ -254,6 +269,20 @@ resource "aws_api_gateway_resource" "health" {
   path_part   = "health"
 }
 
+# API Gateway Resource - /api/v1/save-decision
+resource "aws_api_gateway_resource" "save_decision" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "save-decision"
+}
+
+# API Gateway Resource - /api/v1/submit-override
+resource "aws_api_gateway_resource" "submit_override" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "submit-override"
+}
+
 # API Gateway Method - POST /api/v1/invoke
 resource "aws_api_gateway_method" "invoke_post" {
   rest_api_id   = aws_api_gateway_rest_api.api.id
@@ -298,6 +327,38 @@ resource "aws_api_gateway_method" "health_get" {
 resource "aws_api_gateway_method" "health_options" {
   rest_api_id   = aws_api_gateway_rest_api.api.id
   resource_id   = aws_api_gateway_resource.health.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# API Gateway Method - POST /api/v1/save-decision
+resource "aws_api_gateway_method" "save_decision_post" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.save_decision.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+# API Gateway Method - OPTIONS /api/v1/save-decision (CORS)
+resource "aws_api_gateway_method" "save_decision_options" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.save_decision.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# API Gateway Method - POST /api/v1/submit-override
+resource "aws_api_gateway_method" "submit_override_post" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.submit_override.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+# API Gateway Method - OPTIONS /api/v1/submit-override (CORS)
+resource "aws_api_gateway_method" "submit_override_options" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.submit_override.id
   http_method   = "OPTIONS"
   authorization = "NONE"
 }
@@ -416,6 +477,86 @@ resource "aws_api_gateway_integration_response" "health_options" {
   }
 }
 
+# CORS Integration - OPTIONS /api/v1/save-decision
+resource "aws_api_gateway_integration" "save_decision_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.save_decision.id
+  http_method = aws_api_gateway_method.save_decision_options.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "save_decision_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.save_decision.id
+  http_method = aws_api_gateway_method.save_decision_options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "save_decision_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.save_decision.id
+  http_method = aws_api_gateway_method.save_decision_options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+
+  depends_on = [aws_api_gateway_integration.save_decision_options]
+}
+
+# CORS Integration - OPTIONS /api/v1/submit-override
+resource "aws_api_gateway_integration" "submit_override_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.submit_override.id
+  http_method = aws_api_gateway_method.submit_override_options.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "submit_override_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.submit_override.id
+  http_method = aws_api_gateway_method.submit_override_options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "submit_override_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.submit_override.id
+  http_method = aws_api_gateway_method.submit_override_options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+
+  depends_on = [aws_api_gateway_integration.submit_override_options]
+}
+
 # Lambda Integrations
 resource "aws_api_gateway_integration" "invoke_lambda" {
   rest_api_id             = aws_api_gateway_rest_api.api.id
@@ -444,6 +585,24 @@ resource "aws_api_gateway_integration" "health_lambda" {
   uri                     = aws_lambda_function.health_handler.invoke_arn
 }
 
+resource "aws_api_gateway_integration" "save_decision_lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.save_decision.id
+  http_method             = aws_api_gateway_method.save_decision_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.invoke_handler.invoke_arn
+}
+
+resource "aws_api_gateway_integration" "submit_override_lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.submit_override.id
+  http_method             = aws_api_gateway_method.submit_override_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.invoke_handler.invoke_arn
+}
+
 # Lambda Permissions
 resource "aws_lambda_permission" "invoke_apigw" {
   statement_id  = "AllowAPIGatewayInvoke"
@@ -468,7 +627,9 @@ resource "aws_api_gateway_deployment" "api" {
   depends_on = [
     aws_api_gateway_integration.invoke_lambda,
     aws_api_gateway_integration.status_lambda,
-    aws_api_gateway_integration.health_lambda
+    aws_api_gateway_integration.health_lambda,
+    aws_api_gateway_integration.save_decision_lambda,
+    aws_api_gateway_integration.submit_override_lambda
   ]
 
   lifecycle {
@@ -502,6 +663,16 @@ output "status_url" {
 output "health_url" {
   description = "Health check endpoint URL"
   value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1/health"
+}
+
+output "save_decision_url" {
+  description = "Save decision endpoint URL"
+  value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1/save-decision"
+}
+
+output "submit_override_url" {
+  description = "Submit override endpoint URL"
+  value       = "${aws_api_gateway_stage.api.invoke_url}/api/v1/submit-override"
 }
 
 output "dynamodb_sessions_table" {

@@ -113,25 +113,14 @@ PHASE_EVOLUTION_INSTRUCTIONS = """<evolution>converge=weight_high|diverge=invest
 # Minimal system prompt - agent-parseable, no human formatting
 ARBITRATOR_SYSTEM_PROMPT = """<role>arbitrator</role>
 
-<CRITICAL_DATA_SOURCE_POLICY>
-YOUR ONLY AUTHORITATIVE DATA SOURCES ARE:
-1. Data returned by your tools (DynamoDB queries, knowledge base queries)
-2. Data from the Knowledge Base (ID: UDONMVCXEW)
-3. Information explicitly provided in agent recommendations
-
-YOU MUST NEVER:
-- Assume, infer, or fabricate ANY data not returned by tools
-- Use your general LLM knowledge to fill in missing information
-- Look up or reference external sources, websites, or APIs not provided as tools
-- Make up flight numbers, crew names, costs, regulations, or any operational data
-- Guess values when tool queries return no results or errors
-
-If required data is unavailable from tools: REPORT THE DATA GAP and request clarification.
-VIOLATION OF THIS POLICY COMPROMISES SAFETY-CRITICAL DECISIONS.
-</CRITICAL_DATA_SOURCE_POLICY>
+<DATA_POLICY>
+ONLY_USE: tools|KB:UDONMVCXEW|agent_inputs
+NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
+ON_DATA_GAP: report_error|request_clarification
+</DATA_POLICY>
 
 <rules>P1:Safety>Business=ALWAYS|P2:Safety>Safety=CONSERVATIVE|P3:Business=Pareto</rules>
-<weights>safety:40|cost:25|pax:20|network:15</weights>
+<weights>safety:40|cost:20|pax:20|network:20</weights>
 <conf>0.9-1:agree|0.7-0.9:minor|0.5-0.7:conflicts|<0.5:ESCALATE</conf>
 <out>final_decision,recommendations[],conflicts[],resolutions[],solutions[1-3],recommended_id</out>
 <style>concise|active_voice|direct|actionable</style>
@@ -303,25 +292,41 @@ def _extract_business_agents(responses: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_binding_constraints(responses: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract all binding constraints from safety agents.
-    
+    Extract all binding constraints from safety agents AND business agents.
+
+    Safety agent constraints are mandatory (cannot be overridden).
+    Business agent constraints are advisory (weighted in decision-making).
+
     Args:
         responses: All agent responses
-        
+
     Returns:
-        List of binding constraints with agent names
+        List of binding constraints with agent names and constraint type
     """
     constraints = []
+
+    # Extract safety agent constraints (mandatory - cannot be overridden)
     safety_agents = _extract_safety_agents(responses)
-    
     for agent_name, response in safety_agents.items():
         agent_constraints = response.get("binding_constraints", [])
         for constraint in agent_constraints:
             constraints.append({
                 "agent": agent_name,
-                "constraint": constraint
+                "constraint": constraint,
+                "type": "mandatory"
             })
-    
+
+    # Extract business agent constraints (advisory - inform decision-making)
+    business_agents = _extract_business_agents(responses)
+    for agent_name, response in business_agents.items():
+        agent_constraints = response.get("binding_constraints", [])
+        for constraint in agent_constraints:
+            constraints.append({
+                "agent": agent_name,
+                "constraint": constraint,
+                "type": "advisory"
+            })
+
     return constraints
 
 
@@ -388,39 +393,40 @@ def _format_agent_responses_compact(responses: Dict[str, Any]) -> str:
     """
     lines = []
 
-    # Agent abbreviations
-    abbrev = {
-        "crew_compliance": "crew",
-        "maintenance": "maint",
-        "regulatory": "reg",
-        "network": "net",
-        "guest_experience": "gx",
-        "cargo": "cargo",
-        "finance": "fin"
-    }
+    # Use full agent names for Pydantic schema compatibility
+    # (AgentEvolution.agent_name validates against full names only)
 
-    # Format safety agents
+    # Format safety agents - increased truncation and added reasoning
     safety_agents = _extract_safety_agents(responses)
     for agent_name, response in safety_agents.items():
-        name = abbrev.get(agent_name, agent_name[:4])
-        rec = response.get('recommendation', 'N/A')[:80]
+        rec = response.get('recommendation', 'N/A')[:300]  # Increased from 80
         conf = response.get('confidence', 0.0)
         bc = response.get('binding_constraints', [])
-        bc_str = ";".join(bc[:3]) if bc else ""
+        bc_str = ";".join(bc[:5]) if bc else ""  # Increased from 3
+        reasoning = response.get('reasoning', '')[:150]  # Added reasoning
 
-        line = f"SAFETY:{name}|rec:{rec}|c:{conf:.2f}"
+        line = f"SAFETY:{agent_name}|rec:{rec}|c:{conf:.2f}"
         if bc_str:
             line += f"|bc:{bc_str}"
+        if reasoning:
+            line += f"|reason:{reasoning}"
         lines.append(line)
 
-    # Format business agents
+    # Format business agents - added constraints and reasoning for full context
     business_agents = _extract_business_agents(responses)
     for agent_name, response in business_agents.items():
-        name = abbrev.get(agent_name, agent_name[:4])
-        rec = response.get('recommendation', 'N/A')[:80]
+        rec = response.get('recommendation', 'N/A')[:300]  # Increased from 80
         conf = response.get('confidence', 0.0)
+        bc = response.get('binding_constraints', [])
+        bc_str = ";".join(bc[:5]) if bc else ""  # Added binding constraints
+        reasoning = response.get('reasoning', '')[:150]  # Added reasoning
 
-        lines.append(f"BUSINESS:{name}|rec:{rec}|c:{conf:.2f}")
+        line = f"BUSINESS:{agent_name}|rec:{rec}|c:{conf:.2f}"
+        if bc_str:
+            line += f"|bc:{bc_str}"
+        if reasoning:
+            line += f"|reason:{reasoning}"
+        lines.append(line)
 
     return "\n".join(lines)
 
@@ -446,16 +452,8 @@ def _format_phase_comparison_compact(
     """
     lines = []
 
-    # Agent abbreviations
-    abbrev = {
-        "crew_compliance": "crew",
-        "maintenance": "maint",
-        "regulatory": "reg",
-        "network": "net",
-        "guest_experience": "gx",
-        "cargo": "cargo",
-        "finance": "fin"
-    }
+    # Use full agent names for Pydantic schema compatibility
+    # (AgentEvolution.agent_name validates against full names only)
 
     all_agents = set(initial_responses.keys()) | set(revised_responses.keys())
 
@@ -465,14 +463,13 @@ def _format_phase_comparison_compact(
     dropped = []
 
     for agent_name in sorted(all_agents):
-        name = abbrev.get(agent_name, agent_name[:4])
         initial = initial_responses.get(agent_name)
         revised = revised_responses.get(agent_name)
 
         if initial is None and revised is not None:
-            new_agents.append(name)
+            new_agents.append(agent_name)
         elif initial is not None and revised is None:
-            dropped.append(name)
+            dropped.append(agent_name)
         elif initial is not None and revised is not None:
             initial_rec = initial.get('recommendation', '') if isinstance(initial, dict) else str(initial)
             revised_rec = revised.get('recommendation', '') if isinstance(revised, dict) else str(revised)
@@ -480,7 +477,7 @@ def _format_phase_comparison_compact(
             revised_conf = revised.get('confidence', 0.0) if isinstance(revised, dict) else 0.0
 
             if initial_rec.strip().lower() == revised_rec.strip().lower():
-                stable.append(name)
+                stable.append(agent_name)
             else:
                 # Determine direction
                 conf_change = revised_conf - initial_conf
@@ -496,7 +493,7 @@ def _format_phase_comparison_compact(
                 revised_bc = set(revised.get('binding_constraints', []) if isinstance(revised, dict) else [])
                 new_bc = revised_bc - initial_bc
 
-                change_line = f"CHANGED:{name}|p1_c:{initial_conf:.2f}|p2_c:{revised_conf:.2f}|dir:{direction}"
+                change_line = f"CHANGED:{agent_name}|p1_c:{initial_conf:.2f}|p2_c:{revised_conf:.2f}|dir:{direction}"
                 if new_bc:
                     change_line += f"|new_bc:{';'.join(list(new_bc)[:2])}"
                 changed.append(change_line)
@@ -1248,8 +1245,13 @@ async def arbitrate(
             'error': str(e)
         }
     
-    # Create compact arbitration prompt
-    bc_str = "|".join(f"{c['agent']}:{c['constraint']}" for c in binding_constraints) if binding_constraints else "none"
+    # Create compact arbitration prompt with mandatory/advisory constraint types
+    if binding_constraints:
+        mandatory = [f"{c['agent']}:{c['constraint']}" for c in binding_constraints if c.get('type') == 'mandatory']
+        advisory = [f"{c['agent']}:{c['constraint']}" for c in binding_constraints if c.get('type') == 'advisory']
+        bc_str = f"MANDATORY:{';'.join(mandatory) if mandatory else 'none'}|ADVISORY:{';'.join(advisory) if advisory else 'none'}"
+    else:
+        bc_str = "none"
 
     prompt = f"""AGENTS:
 {formatted_responses}

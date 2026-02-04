@@ -32,28 +32,89 @@ export interface MessageData {
     solutionTitle?: string;
 }
 
+// Impact type interfaces for structured data
+export interface PassengerImpact {
+    total_passengers: number;
+    connecting_passengers: number;
+    delay_minutes: number;
+    missed_connections: number;
+    compensation_required: boolean;
+    passenger_notifications: string;
+}
+
+export interface FinancialImpact {
+    aircraft_swap_cost: number;
+    crew_costs: number;
+    passenger_compensation: number;
+    rebooking_costs?: number;
+    hotel_accommodation?: number;
+    total_estimated_cost: number;
+    currency: string;
+}
+
+export interface NetworkImpact {
+    downstream_flights_affected: number;
+    rotation_preserved: boolean;
+    EY17_connection_protected?: boolean;
+    network_propagation: string;
+}
+
+// Recovery Plan interfaces
+export interface RecoveryStep {
+    step_number: number;
+    step_name: string;
+    description: string;
+    responsible_agent: string;
+    dependencies: number[];
+    estimated_duration: string;
+    automation_possible: boolean;
+    action_type: string;
+    parameters: Record<string, any>;
+    success_criteria: string;
+    rollback_procedure: string | null;
+}
+
+export interface ContingencyPlan {
+    trigger: string;
+    action: string;
+    responsible_agent: string;
+}
+
+export interface RecoveryPlan {
+    solution_id: number;
+    total_steps: number;
+    estimated_total_duration: string;
+    steps: RecoveryStep[];
+    critical_path: number[];
+    contingency_plans: ContingencyPlan[];
+}
+
 export interface Solution {
     id: string;
-    solution_id: number; // NEW: numeric ID from API
+    solution_id: number;
     title: string;
     description: string;
-    recommendations: string[]; // NEW: array of recommendation strings
-    safety_score: number; // NEW: 0-100
-    passenger_score: number; // NEW: 0-100
-    network_score: number; // NEW: 0-100
-    cost_score: number; // NEW: 0-100
-    composite_score: number; // NEW: 0-100
-    impact: 'low' | 'medium' | 'high'; // Derived from scores
+    recommendations: string[];
+    safety_score: number;
+    passenger_score: number;
+    network_score: number;
+    cost_score: number;
+    composite_score: number;
+    impact: 'low' | 'medium' | 'high';
     cost: string;
-    justification: string; // NEW: detailed justification
-    reasoning: string; // NEW: reasoning text
-    passenger_impact: string; // NEW: passenger impact details
-    financial_impact: string; // NEW: financial impact details
-    network_impact: string; // NEW: network impact details
-    pros: string[]; // NEW: array of pros
-    cons: string[]; // NEW: array of cons
-    risks: string[]; // NEW: array of risks
-    recommended: boolean; // Derived from recommended_solution_id
+    justification: string;
+    reasoning: string;
+    passenger_impact: PassengerImpact | string;
+    financial_impact: FinancialImpact | string;
+    network_impact: NetworkImpact | string;
+    safety_compliance?: string;
+    pros: string[];
+    cons: string[];
+    risks: string[];
+    confidence: number;
+    estimated_duration: string;
+    recommended: boolean;
+    recovery_plan?: RecoveryPlan;
 }
 
 // NEW: Three-phase API response structure interfaces
@@ -116,14 +177,16 @@ export interface SolutionOption {
     composite_score: number;
     justification: string;
     reasoning: string;
-    passenger_impact: string;
-    financial_impact: string;
-    network_impact: string;
+    passenger_impact: PassengerImpact | string;
+    financial_impact: FinancialImpact | string;
+    network_impact: NetworkImpact | string;
+    safety_compliance?: string;
     pros: string[];
     cons: string[];
     risks: string[];
     estimated_duration?: string;
     confidence?: number;
+    recovery_plan?: RecoveryPlan;
 }
 
 /**
@@ -263,10 +326,63 @@ export class ResponseMapper {
                 passenger_impact: option.passenger_impact || '',
                 financial_impact: option.financial_impact || '',
                 network_impact: option.network_impact || '',
+                safety_compliance: option.safety_compliance || '',
                 pros: Array.isArray(option.pros) ? option.pros : [],
                 cons: Array.isArray(option.cons) ? option.cons : [],
                 risks: Array.isArray(option.risks) ? option.risks : [],
+                confidence: option.confidence || 0,
+                estimated_duration: option.estimated_duration || 'Unknown',
                 recommended: option.solution_id === recommendedId,
+                recovery_plan: option.recovery_plan || undefined,
+            };
+
+            solutions.push(solution);
+        });
+
+        return solutions;
+    }
+
+    /**
+     * Parse final_decision solution options into Solution array
+     * Similar to parseSolutions but reads from final_decision structure
+     * This version includes recovery_plan data that's missing in phase3_arbitration
+     */
+    static parseSolutionsFromFinalDecision(finalDecision: any): Solution[] {
+        const solutions: Solution[] = [];
+
+        if (!finalDecision || !Array.isArray(finalDecision.solution_options)) {
+            return solutions;
+        }
+
+        const recommendedId = finalDecision.recommended_solution_id;
+
+        finalDecision.solution_options.forEach((option: any) => {
+            const solution: Solution = {
+                id: `solution-${option.solution_id}`,
+                solution_id: option.solution_id || 0,
+                title: option.title || 'Untitled Solution',
+                description: option.description || '',
+                recommendations: Array.isArray(option.recommendations) ? option.recommendations : [],
+                safety_score: option.safety_score || 0,
+                passenger_score: option.passenger_score || 0,
+                network_score: option.network_score || 0,
+                cost_score: option.cost_score || 0,
+                composite_score: option.composite_score || 0,
+                impact: this.deriveRiskLevel(option),
+                cost: option.estimated_duration || 'Unknown',
+                justification: option.justification || '',
+                reasoning: option.reasoning || '',
+                passenger_impact: option.passenger_impact || '',
+                financial_impact: option.financial_impact || '',
+                network_impact: option.network_impact || '',
+                safety_compliance: option.safety_compliance || '',
+                pros: Array.isArray(option.pros) ? option.pros : [],
+                cons: Array.isArray(option.cons) ? option.cons : [],
+                risks: Array.isArray(option.risks) ? option.risks : [],
+                confidence: option.confidence || 0,
+                estimated_duration: option.estimated_duration || 'Unknown',
+                recommended: option.solution_id === recommendedId,
+                recovery_plan: option.recovery_plan || undefined,
             };
 
             solutions.push(solution);
@@ -279,8 +395,11 @@ export class ResponseMapper {
      * Main entry point for parsing three-phase audit trail
      * Calls parsePhase1, parsePhase2, and parseSolutions
      * Returns combined result object with all parsed data
+     *
+     * @param auditTrail - The audit trail containing phase1, phase2, phase3 data
+     * @param finalDecision - Optional final_decision object that contains solution_options with recovery_plan
      */
-    static parseAuditTrail(auditTrail: AuditTrail): {
+    static parseAuditTrail(auditTrail: AuditTrail, finalDecision?: any): {
         phase1Messages: MessageData[];
         phase2Messages: MessageData[];
         solutions: Solution[];
@@ -301,6 +420,8 @@ export class ResponseMapper {
         console.log('phase1_initial exists:', !!auditTrail.phase1_initial);
         console.log('phase2_revision exists:', !!auditTrail.phase2_revision);
         console.log('phase3_arbitration exists:', !!auditTrail.phase3_arbitration);
+        console.log('finalDecision exists:', !!finalDecision);
+        console.log('finalDecision.solution_options exists:', !!finalDecision?.solution_options);
 
         // Parse each phase, handling missing phases gracefully
         const phase1Messages = auditTrail.phase1_initial
@@ -311,11 +432,20 @@ export class ResponseMapper {
             ? this.parsePhase2(auditTrail.phase2_revision)
             : [];
 
-        const solutions = auditTrail.phase3_arbitration
-            ? this.parseSolutions(auditTrail.phase3_arbitration)
-            : [];
+        // Prefer finalDecision.solution_options if available (it includes recovery_plan)
+        // Fall back to phase3_arbitration.solution_options
+        let solutions: Solution[] = [];
+        let recommendedSolutionId: number | null = null;
 
-        const recommendedSolutionId = auditTrail.phase3_arbitration?.recommended_solution_id || null;
+        if (finalDecision?.solution_options && Array.isArray(finalDecision.solution_options)) {
+            console.log('Using finalDecision.solution_options (includes recovery_plan)');
+            solutions = this.parseSolutionsFromFinalDecision(finalDecision);
+            recommendedSolutionId = finalDecision.recommended_solution_id || null;
+        } else if (auditTrail.phase3_arbitration) {
+            console.log('Using phase3_arbitration.solution_options');
+            solutions = this.parseSolutions(auditTrail.phase3_arbitration);
+            recommendedSolutionId = auditTrail.phase3_arbitration.recommended_solution_id || null;
+        }
 
         console.log('Parsed phase1Messages:', phase1Messages.length);
         console.log('Parsed phase2Messages:', phase2Messages.length);

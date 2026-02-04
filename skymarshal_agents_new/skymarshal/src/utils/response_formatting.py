@@ -13,9 +13,10 @@ Key Principles:
 from typing import Dict, Any, List, Optional
 
 # Maximum lengths for A2A communication
-MAX_RECOMMENDATION_LENGTH = 100
-MAX_REASONING_LENGTH = 150
-MAX_CONSTRAINTS_PER_AGENT = 3
+# Increased to preserve business agent data for arbitrator (user confirmed token trade-off OK)
+MAX_RECOMMENDATION_LENGTH = 300  # 3x increase for detailed recommendations
+MAX_REASONING_LENGTH = 300       # 2x increase for full reasoning context
+MAX_CONSTRAINTS_PER_AGENT = 5    # Allow more constraints to be preserved
 
 
 def truncate_recommendation(rec: str, max_len: int = MAX_RECOMMENDATION_LENGTH) -> str:

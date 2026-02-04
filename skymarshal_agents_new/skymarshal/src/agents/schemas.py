@@ -1956,24 +1956,27 @@ class RecoverySolution(BaseModel):
     @field_validator("composite_score")
     @classmethod
     def validate_composite_score(cls, v: float, info) -> float:
-        """Validate composite score matches weighted average"""
+        """Auto-correct composite score to match weighted average (40/20/20/20)"""
         # Get individual scores from validation context
         safety = info.data.get("safety_score", 0)
         cost = info.data.get("cost_score", 0)
         passenger = info.data.get("passenger_score", 0)
         network = info.data.get("network_score", 0)
-        
-        # Calculate expected composite (40% safety, 20% cost, 20% passenger, 20% network)
+
+        # Calculate correct composite (40% safety, 20% cost, 20% passenger, 20% network)
         expected = (safety * 0.4) + (cost * 0.2) + (passenger * 0.2) + (network * 0.2)
-        
-        # Allow small floating point tolerance
+        expected = round(expected, 2)
+
+        # Log if correction needed (but don't fail - auto-correct instead)
         if abs(v - expected) > 0.1:
-            raise ValueError(
-                f"Composite score {v} does not match weighted average {expected:.2f}. "
-                "Expected: 40% safety + 20% cost + 20% passenger + 20% network"
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Auto-correcting composite_score: {v} → {expected} "
+                f"(safety={safety}, cost={cost}, pax={passenger}, network={network})"
             )
-        
-        return v
+
+        # Return the correctly calculated value
+        return expected
     
     @field_validator("title", "description", "safety_compliance", "estimated_duration")
     @classmethod
@@ -2276,33 +2279,40 @@ class ArbitratorOutput(BaseModel):
     @field_validator("solution_options")
     @classmethod
     def validate_solution_options(cls, v: Optional[List[RecoverySolution]]) -> Optional[List[RecoverySolution]]:
-        """Validate solution options are properly ranked and have unique IDs"""
+        """Validate and auto-fix solution options: 1-3 solutions, ranked, sequential IDs"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Allow None for error scenarios
         if v is None:
             return v
-        
-        # Treat empty list as None for backward compatibility
+
+        # Empty list treated as None
         if not v:
             return None
-        
+
+        # Enforce minimum 1 solution (already satisfied if we get here)
+        # Truncate to top 3 if more than 3 (auto-fix instead of reject)
         if len(v) > 3:
-            raise ValueError(f"Maximum 3 solution options allowed, got {len(v)}")
-        
-        # Check solution IDs are unique and sequential
-        solution_ids = [s.solution_id for s in v]
-        expected_ids = list(range(1, len(v) + 1))
-        if sorted(solution_ids) != expected_ids:
-            raise ValueError(
-                f"Solution IDs must be unique and sequential 1..{len(v)}, got {solution_ids}"
-            )
-        
-        # Check solutions are ranked by composite score (descending)
-        scores = [s.composite_score for s in v]
-        if scores != sorted(scores, reverse=True):
-            raise ValueError(
-                f"Solutions must be ranked by composite score (highest first). "
-                f"Got scores: {scores}"
-            )
-        
+            logger.warning(f"Truncating {len(v)} solutions to top 3 by composite_score")
+            v = sorted(v, key=lambda x: x.composite_score, reverse=True)[:3]
+
+        # Auto-sort by composite score (descending) - fixes ranking issues
+        v = sorted(v, key=lambda x: x.composite_score, reverse=True)
+
+        # Auto-fix solution IDs to be sequential (1, 2, 3)
+        for i, solution in enumerate(v):
+            expected_id = i + 1
+            if solution.solution_id != expected_id:
+                logger.warning(f"Auto-fixing solution_id: {solution.solution_id} → {expected_id}")
+                # Create a copy with corrected ID (Pydantic models are immutable by default)
+                solution_dict = solution.model_dump()
+                solution_dict["solution_id"] = expected_id
+                # Also fix recovery_plan.solution_id to match
+                if "recovery_plan" in solution_dict and solution_dict["recovery_plan"]:
+                    solution_dict["recovery_plan"]["solution_id"] = expected_id
+                v[i] = RecoverySolution(**solution_dict)
+
         return v
     
     @field_validator("recommended_solution_id")
@@ -2351,45 +2361,97 @@ class ArbitratorOutput(BaseModel):
 class DecisionRecord(BaseModel):
     """
     Record of a decision for historical learning and S3 storage.
-    
+
     This schema captures the complete decision-making process including
     all agent responses, solution options, human selection, and eventual
     outcomes. Records are stored in S3 for historical learning and audit.
-    
+
     S3 Storage:
-        Records are stored in two buckets:
-        - skymarshal-prod-knowledge-base-368613657554 (for historical learning)
-        - skymarshal-prod-decisions-368613657554 (for audit trail)
-        
-        Key format: decisions/YYYY/MM/DD/{disruption_id}.json
+        Records are stored in the decisions bucket with separate folders:
+        - agent-decisions/YYYY/MM/DD/HH-MM-SS/{flight}_{disruption_id}.json
+        - human-overrides/YYYY/MM/DD/HH-MM-SS/{flight}_{disruption_id}.json
     """
-    
+
+    # Record Type
+    record_type: str = Field(
+        default="agent_decision",
+        description="Type of record: 'agent_decision' or 'human_override'"
+    )
+
     # Disruption Context
     disruption_id: str = Field(description="Unique identifier for this disruption event")
     timestamp: str = Field(description="ISO 8601 timestamp of decision")
     flight_number: str = Field(description="Flight number (e.g., EY123)")
     disruption_type: str = Field(description="Type of disruption (e.g., mechanical, weather, crew)")
-    disruption_severity: str = Field(description="Severity: low, medium, high, critical")
-    
+    disruption_severity: str = Field(
+        default="medium",
+        description="Severity: low, medium, high, critical"
+    )
+
+    # Session Context
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID for tracking conversation context"
+    )
+
     # Agent Recommendations
-    agent_responses: Dict[str, Any] = Field(description="All agent responses from analysis")
-    
+    agent_responses: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="All agent responses from analysis"
+    )
+
     # Arbitrator Analysis
-    solution_options: List[RecoverySolution] = Field(description="All solution options presented")
-    recommended_solution_id: int = Field(description="Arbitrator's recommended solution")
+    solution_options: List[RecoverySolution] = Field(
+        default_factory=list,
+        description="All solution options presented"
+    )
+    recommended_solution_id: Optional[int] = Field(
+        default=None,
+        description="Arbitrator's recommended solution"
+    )
     conflicts_identified: List[ConflictDetail] = Field(default_factory=list)
     conflict_resolutions: List[ResolutionDetail] = Field(default_factory=list)
-    
+
     # Human Decision
-    selected_solution_id: int = Field(description="Solution ID selected by human")
+    selected_solution_id: Optional[int] = Field(
+        default=None,
+        description="Solution ID selected by human (None for overrides)"
+    )
     selection_rationale: Optional[str] = Field(
         default=None,
         description="Why human chose this solution"
     )
     human_override: bool = Field(
-        description="True if human selected different solution than recommended"
+        default=False,
+        description="True if human provided manual override instead of selecting solution"
     )
-    
+
+    # Override-specific fields
+    override_directive: Optional[str] = Field(
+        default=None,
+        description="Human override directive text (if human_override=True)"
+    )
+    rejected_solutions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Solutions that were available but rejected by human (for overrides)"
+    )
+
+    # Detailed Report (for agent decisions after recovery execution)
+    detailed_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Full detailed report including solution scores, impacts, recovery plan"
+    )
+
+    # Recovery Execution
+    recovery_executed: bool = Field(
+        default=False,
+        description="Whether recovery plan has been executed"
+    )
+    execution_timestamp: Optional[str] = Field(
+        default=None,
+        description="Timestamp when recovery was executed"
+    )
+
     # Outcome (filled in later after execution)
     outcome_status: Optional[str] = Field(
         default=None,
