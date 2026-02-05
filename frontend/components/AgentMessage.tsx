@@ -57,6 +57,45 @@ function isNetworkImpact(impact: NetworkImpact | string): impact is NetworkImpac
   return typeof impact === 'object' && impact !== null && 'downstream_flights_affected' in impact;
 }
 
+// Alternative interfaces for solution_2.json format
+interface AlternativePassengerImpact {
+  affected_count: number;
+  delay_hours: number;
+  cancellation_flag: boolean;
+}
+
+interface AlternativeFinancialImpact {
+  total_cost: number;
+  breakdown: {
+    aircraft_positioning?: number;
+    crew_coordination?: number;
+    passenger_compensation?: number;
+    passenger_reprotection?: number;
+    compensation_eu261?: number;
+    hotel_accommodations?: number;
+    compensation?: number;
+    [key: string]: number | undefined;
+  };
+}
+
+interface AlternativeNetworkImpact {
+  downstream_flights: number;
+  connection_misses: number;
+}
+
+// Type guards for alternative formats
+function isAlternativePassengerImpact(impact: unknown): impact is AlternativePassengerImpact {
+  return typeof impact === 'object' && impact !== null && 'affected_count' in impact;
+}
+
+function isAlternativeFinancialImpact(impact: unknown): impact is AlternativeFinancialImpact {
+  return typeof impact === 'object' && impact !== null && 'total_cost' in impact;
+}
+
+function isAlternativeNetworkImpact(impact: unknown): impact is AlternativeNetworkImpact {
+  return typeof impact === 'object' && impact !== null && 'downstream_flights' in impact;
+}
+
 function formatCurrency(amount: number, currency: string = 'USD'): string {
   if (amount >= 1000000) {
     return `$${(amount / 1000000).toFixed(1)}M ${currency}`;
@@ -675,8 +714,11 @@ const ReportModal: React.FC<{
 
   const recoveryPlan = solution.recovery_plan;
   const passengerImpact = isPassengerImpact(solution.passenger_impact) ? solution.passenger_impact : null;
+  const altPassengerImpact = isAlternativePassengerImpact(solution.passenger_impact) ? solution.passenger_impact : null;
   const financialImpact = isFinancialImpact(solution.financial_impact) ? solution.financial_impact : null;
+  const altFinancialImpact = isAlternativeFinancialImpact(solution.financial_impact) ? solution.financial_impact : null;
   const networkImpact = isNetworkImpact(solution.network_impact) ? solution.network_impact : null;
+  const altNetworkImpact = isAlternativeNetworkImpact(solution.network_impact) ? solution.network_impact : null;
 
   // Score bar for report
   const ReportScoreBar: React.FC<{ label: string; value: number; color: string }> = ({ label, value, color }) => (
@@ -822,8 +864,25 @@ const ReportModal: React.FC<{
                         <span className="font-bold text-red-600">{passengerImpact.missed_connections}</span>
                       </div>
                     </div>
+                  ) : altPassengerImpact ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-700">Affected Passengers</span>
+                        <span className="font-bold">{altPassengerImpact.affected_count}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-700">Delay</span>
+                        <span className="font-bold">{altPassengerImpact.delay_hours}h</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-700">Cancellation</span>
+                        <span className={`font-bold ${altPassengerImpact.cancellation_flag ? 'text-red-600' : 'text-emerald-600'}`}>
+                          {altPassengerImpact.cancellation_flag ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                    </div>
                   ) : (
-                    <p className="text-sm text-blue-600">{String(solution.passenger_impact)}</p>
+                    <p className="text-sm text-blue-600">No passenger impact data available</p>
                   )}
                 </div>
 
@@ -852,8 +911,21 @@ const ReportModal: React.FC<{
                         <span className="font-bold text-emerald-900">{formatCost(financialImpact.total_estimated_cost, financialImpact.currency)}</span>
                       </div>
                     </div>
+                  ) : altFinancialImpact ? (
+                    <div className="space-y-3">
+                      {Object.entries(altFinancialImpact.breakdown).map(([key, value]) => (
+                        <div key={key} className="flex justify-between text-sm">
+                          <span className="text-emerald-700">{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+                          <span className="font-bold">{formatCost(value || 0)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm pt-2 border-t border-emerald-200">
+                        <span className="text-emerald-800 font-bold">Total</span>
+                        <span className="font-bold text-emerald-900">{formatCost(altFinancialImpact.total_cost)}</span>
+                      </div>
+                    </div>
                   ) : (
-                    <p className="text-sm text-emerald-600">{String(solution.financial_impact)}</p>
+                    <p className="text-sm text-emerald-600">No financial impact data available</p>
                   )}
                 </div>
 
@@ -882,8 +954,21 @@ const ReportModal: React.FC<{
                         </span>
                       </div>
                     </div>
+                  ) : altNetworkImpact ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-purple-700">Downstream Flights</span>
+                        <span className="font-bold">{altNetworkImpact.downstream_flights}</span>
+                      </div>
+                      <div className="flex justify-between text-sm items-center">
+                        <span className="text-purple-700">Connection Misses</span>
+                        <span className={`font-bold ${altNetworkImpact.connection_misses === 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {altNetworkImpact.connection_misses}
+                        </span>
+                      </div>
+                    </div>
                   ) : (
-                    <p className="text-sm text-purple-600">{String(solution.network_impact)}</p>
+                    <p className="text-sm text-purple-600">No network impact data available</p>
                   )}
                 </div>
               </div>
@@ -941,7 +1026,7 @@ const ReportModal: React.FC<{
                         {idx + 1}
                       </div>
                       <div>
-                        <div className="text-sm font-bold text-amber-800">If: {plan.trigger_condition}</div>
+                        <div className="text-sm font-bold text-amber-800">If: {plan.trigger}</div>
                         <div className="text-sm text-amber-700 mt-1">Then: {plan.action}</div>
                       </div>
                     </div>

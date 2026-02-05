@@ -60,24 +60,87 @@ export interface Solution {
   recovery_plan?: RecoveryPlan;
 }
 
-// Agent color and icon mapping for recovery steps
-const AGENT_STYLES: Record<string, { bg: string; text: string; icon: string }> = {
-  maintenance: { bg: 'bg-amber-50', text: 'text-amber-700', icon: '🔧' },
-  network: { bg: 'bg-purple-50', text: 'text-purple-700', icon: '🌐' },
-  crew_compliance: { bg: 'bg-blue-50', text: 'text-blue-700', icon: '👤' },
-  guest_experience: { bg: 'bg-pink-50', text: 'text-pink-700', icon: '💺' },
-  regulatory: { bg: 'bg-slate-100', text: 'text-slate-700', icon: '📜' },
-  finance: { bg: 'bg-emerald-50', text: 'text-emerald-700', icon: '💰' },
-  cargo: { bg: 'bg-orange-50', text: 'text-orange-700', icon: '📦' },
+// Backend name → Frontend recovery agent name mapping
+const AGENT_ALIAS_MAP: Record<string, string> = {
+  network: 'flight_scheduling',
+  guest_experience: 'guest_recovery',
+  crew_compliance: 'crew_recovery',
+  cargo: 'cargo_recovery',
+  maintenance: 'maintenance',
+  regulatory: 'regulatory',
+  finance: 'finance',
+  communications: 'communications',
 };
 
-function getAgentStyle(agent: string) {
-  return AGENT_STYLES[agent.toLowerCase()] || { bg: 'bg-slate-50', text: 'text-slate-700', icon: '🔹' };
+// Recovery agent styles with new names and labels
+const RECOVERY_AGENT_CONFIG: Record<string, { bg: string; text: string; icon: string; label: string }> = {
+  flight_scheduling: { bg: 'bg-purple-50', text: 'text-purple-700', icon: '✈️', label: 'Flight Scheduling' },
+  guest_recovery: { bg: 'bg-pink-50', text: 'text-pink-700', icon: '💺', label: 'Guest Recovery' },
+  crew_recovery: { bg: 'bg-blue-50', text: 'text-blue-700', icon: '👥', label: 'Crew Recovery' },
+  cargo_recovery: { bg: 'bg-orange-50', text: 'text-orange-700', icon: '📦', label: 'Cargo Recovery' },
+  communications: { bg: 'bg-cyan-50', text: 'text-cyan-700', icon: '📢', label: 'Communications' },
+  maintenance: { bg: 'bg-amber-50', text: 'text-amber-700', icon: '🔧', label: 'Maintenance' },
+  regulatory: { bg: 'bg-slate-100', text: 'text-slate-700', icon: '📜', label: 'Regulatory' },
+  finance: { bg: 'bg-emerald-50', text: 'text-emerald-700', icon: '💰', label: 'Finance' },
+};
+
+function getAgentStyle(agent: string | undefined): { bg: string; text: string; icon: string; label: string } {
+  // Handle undefined or null agent
+  if (!agent) {
+    return {
+      bg: 'bg-slate-50',
+      text: 'text-slate-700',
+      icon: '🔹',
+      label: 'Unknown Agent'
+    };
+  }
+  const normalizedName = agent.toLowerCase().replace(/\s+/g, '_');
+  const aliasedName = AGENT_ALIAS_MAP[normalizedName] || normalizedName;
+  return RECOVERY_AGENT_CONFIG[aliasedName] || {
+    bg: 'bg-slate-50',
+    text: 'text-slate-700',
+    icon: '🔹',
+    label: normalizedName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  };
+}
+
+// Alternative impact formats (from some solution files)
+interface AlternativePassengerImpact {
+  affected_count: number;
+  delay_hours: number;
+  cancellation_flag: boolean;
+}
+
+interface AlternativeFinancialImpact {
+  total_cost: number;
+  breakdown: {
+    aircraft_positioning?: number;
+    crew_coordination?: number;
+    passenger_compensation?: number;
+    [key: string]: number | undefined;
+  };
+}
+
+interface AlternativeNetworkImpact {
+  downstream_flights: number;
+  connection_misses: number;
 }
 
 // Helper functions to format impact objects
-function isPassengerImpact(impact: PassengerImpact | string): impact is PassengerImpact {
+function isPassengerImpact(impact: PassengerImpact | string | AlternativePassengerImpact): impact is PassengerImpact {
   return typeof impact === 'object' && impact !== null && 'total_passengers' in impact;
+}
+
+function isAlternativePassengerImpact(impact: unknown): impact is AlternativePassengerImpact {
+  return typeof impact === 'object' && impact !== null && 'affected_count' in impact;
+}
+
+function isAlternativeFinancialImpact(impact: unknown): impact is AlternativeFinancialImpact {
+  return typeof impact === 'object' && impact !== null && 'total_cost' in impact && 'breakdown' in impact;
+}
+
+function isAlternativeNetworkImpact(impact: unknown): impact is AlternativeNetworkImpact {
+  return typeof impact === 'object' && impact !== null && 'downstream_flights' in impact && 'connection_misses' in impact;
 }
 
 function isFinancialImpact(impact: FinancialImpact | string): impact is FinancialImpact {
@@ -97,23 +160,32 @@ function formatCurrency(amount: number, currency: string = 'USD'): string {
   return `$${amount} ${currency}`;
 }
 
-function getPassengerSummary(impact: PassengerImpact | string): string {
+function getPassengerSummary(impact: PassengerImpact | string | AlternativePassengerImpact): string {
   if (isPassengerImpact(impact)) {
     return `${impact.total_passengers} pax`;
+  }
+  if (isAlternativePassengerImpact(impact)) {
+    return `${impact.affected_count} pax`;
   }
   return typeof impact === 'string' ? impact.substring(0, 20) + '...' : '';
 }
 
-function getDelaySummary(impact: PassengerImpact | string): string {
+function getDelaySummary(impact: PassengerImpact | string | AlternativePassengerImpact): string {
   if (isPassengerImpact(impact)) {
     return `${impact.delay_minutes} min`;
+  }
+  if (isAlternativePassengerImpact(impact)) {
+    return `${impact.delay_hours}h`;
   }
   return '';
 }
 
-function getCostSummary(impact: FinancialImpact | string): string {
+function getCostSummary(impact: FinancialImpact | string | AlternativeFinancialImpact): string {
   if (isFinancialImpact(impact)) {
     return formatCurrency(impact.total_estimated_cost, impact.currency);
+  }
+  if (isAlternativeFinancialImpact(impact)) {
+    return formatCurrency(impact.total_cost);
   }
   return typeof impact === 'string' ? impact.substring(0, 20) + '...' : '';
 }
@@ -165,142 +237,244 @@ const ScoreBar: React.FC<{
 };
 
 // Passenger Impact Detail Component
-const PassengerImpactDetail: React.FC<{ impact: PassengerImpact | string }> = ({ impact }) => {
-  if (!isPassengerImpact(impact)) {
+const PassengerImpactDetail: React.FC<{ impact: PassengerImpact | string | AlternativePassengerImpact }> = ({ impact }) => {
+  // Handle standard PassengerImpact format
+  if (isPassengerImpact(impact)) {
+    return (
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="flex items-center gap-2">
+          <Users size={14} className="text-blue-500" />
+          <span className="text-slate-600">Total Passengers:</span>
+          <span className="font-semibold text-slate-800">{impact.total_passengers}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Plane size={14} className="text-blue-500" />
+          <span className="text-slate-600">Connecting:</span>
+          <span className="font-semibold text-slate-800">{impact.connecting_passengers}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Clock size={14} className="text-blue-500" />
+          <span className="text-slate-600">Delay:</span>
+          <span className="font-semibold text-slate-800">{impact.delay_minutes} min</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <XCircle size={14} className="text-red-500" />
+          <span className="text-slate-600">Missed Connections:</span>
+          <span className="font-semibold text-slate-800">{impact.missed_connections}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {impact.compensation_required ? (
+            <CheckCircle size={14} className="text-amber-500" />
+          ) : (
+            <XCircle size={14} className="text-green-500" />
+          )}
+          <span className="text-slate-600">Compensation:</span>
+          <span className="font-semibold text-slate-800">
+            {impact.compensation_required ? 'Required' : 'Not Required'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 col-span-2">
+          <Info size={14} className="text-blue-500" />
+          <span className="text-slate-600">Notifications:</span>
+          <span className="font-semibold text-slate-800">{impact.passenger_notifications}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle alternative format (affected_count, delay_hours, cancellation_flag)
+  if (isAlternativePassengerImpact(impact)) {
+    return (
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="flex items-center gap-2">
+          <Users size={14} className="text-blue-500" />
+          <span className="text-slate-600">Affected Passengers:</span>
+          <span className="font-semibold text-slate-800">{impact.affected_count}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Clock size={14} className="text-blue-500" />
+          <span className="text-slate-600">Delay:</span>
+          <span className="font-semibold text-slate-800">{impact.delay_hours} hours</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {impact.cancellation_flag ? (
+            <XCircle size={14} className="text-red-500" />
+          ) : (
+            <CheckCircle size={14} className="text-green-500" />
+          )}
+          <span className="text-slate-600">Cancellation:</span>
+          <span className="font-semibold text-slate-800">
+            {impact.cancellation_flag ? 'Yes' : 'No'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle string format
+  if (typeof impact === 'string') {
     return <div className="text-sm text-slate-600">{impact}</div>;
   }
 
-  return (
-    <div className="grid grid-cols-2 gap-3 text-sm">
-      <div className="flex items-center gap-2">
-        <Users size={14} className="text-blue-500" />
-        <span className="text-slate-600">Total Passengers:</span>
-        <span className="font-semibold text-slate-800">{impact.total_passengers}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <Plane size={14} className="text-blue-500" />
-        <span className="text-slate-600">Connecting:</span>
-        <span className="font-semibold text-slate-800">{impact.connecting_passengers}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <Clock size={14} className="text-blue-500" />
-        <span className="text-slate-600">Delay:</span>
-        <span className="font-semibold text-slate-800">{impact.delay_minutes} min</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <XCircle size={14} className="text-red-500" />
-        <span className="text-slate-600">Missed Connections:</span>
-        <span className="font-semibold text-slate-800">{impact.missed_connections}</span>
-      </div>
-      <div className="flex items-center gap-2 col-span-2">
-        <Info size={14} className="text-blue-500" />
-        <span className="text-slate-600">Notifications:</span>
-        <span className="font-medium text-slate-700">{impact.passenger_notifications}</span>
-      </div>
-      {impact.compensation_required && (
-        <div className="flex items-center gap-2 col-span-2">
-          <DollarSign size={14} className="text-amber-500" />
-          <span className="text-amber-700 font-medium">Compensation Required</span>
-        </div>
-      )}
-    </div>
-  );
+  // Fallback for unknown object format - display as JSON
+  return <div className="text-sm text-slate-600">{JSON.stringify(impact, null, 2)}</div>;
 };
 
 // Financial Impact Detail Component
-const FinancialImpactDetail: React.FC<{ impact: FinancialImpact | string }> = ({ impact }) => {
-  if (!isFinancialImpact(impact)) {
+const FinancialImpactDetail: React.FC<{ impact: FinancialImpact | string | AlternativeFinancialImpact }> = ({ impact }) => {
+  // Handle standard FinancialImpact format
+  if (isFinancialImpact(impact)) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between p-2 bg-emerald-100 rounded-lg">
+          <span className="text-sm font-semibold text-emerald-900">Total Estimated Cost</span>
+          <span className="text-lg font-bold text-emerald-700">{formatCurrency(impact.total_estimated_cost, impact.currency)}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {impact.aircraft_swap_cost > 0 && (
+            <div className="flex justify-between p-2 bg-slate-50 rounded">
+              <span className="text-slate-600">Aircraft Swap</span>
+              <span className="font-medium text-slate-800">{formatCurrency(impact.aircraft_swap_cost, impact.currency)}</span>
+            </div>
+          )}
+          {impact.crew_costs > 0 && (
+            <div className="flex justify-between p-2 bg-slate-50 rounded">
+              <span className="text-slate-600">Crew Costs</span>
+              <span className="font-medium text-slate-800">{formatCurrency(impact.crew_costs, impact.currency)}</span>
+            </div>
+          )}
+          {impact.passenger_compensation > 0 && (
+            <div className="flex justify-between p-2 bg-slate-50 rounded">
+              <span className="text-slate-600">Passenger Comp.</span>
+              <span className="font-medium text-slate-800">{formatCurrency(impact.passenger_compensation, impact.currency)}</span>
+            </div>
+          )}
+          {impact.rebooking_costs && impact.rebooking_costs > 0 && (
+            <div className="flex justify-between p-2 bg-slate-50 rounded">
+              <span className="text-slate-600">Rebooking</span>
+              <span className="font-medium text-slate-800">{formatCurrency(impact.rebooking_costs, impact.currency)}</span>
+            </div>
+          )}
+          {impact.hotel_accommodation && impact.hotel_accommodation > 0 && (
+            <div className="flex justify-between p-2 bg-slate-50 rounded">
+              <span className="text-slate-600">Hotel</span>
+              <span className="font-medium text-slate-800">{formatCurrency(impact.hotel_accommodation, impact.currency)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Handle alternative format (total_cost + breakdown)
+  if (isAlternativeFinancialImpact(impact)) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between p-2 bg-emerald-100 rounded-lg">
+          <span className="text-sm font-semibold text-emerald-900">Total Cost</span>
+          <span className="text-lg font-bold text-emerald-700">{formatCurrency(impact.total_cost)}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {Object.entries(impact.breakdown).map(([key, value]) => (
+            value && value > 0 && (
+              <div key={key} className="flex justify-between p-2 bg-slate-50 rounded">
+                <span className="text-slate-600 capitalize">{key.replace(/_/g, ' ')}</span>
+                <span className="font-medium text-slate-800">{formatCurrency(value)}</span>
+              </div>
+            )
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Handle string format
+  if (typeof impact === 'string') {
     return <div className="text-sm text-slate-600">{impact}</div>;
   }
 
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between p-2 bg-emerald-100 rounded-lg">
-        <span className="text-sm font-semibold text-emerald-900">Total Estimated Cost</span>
-        <span className="text-lg font-bold text-emerald-700">{formatCurrency(impact.total_estimated_cost, impact.currency)}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        {impact.aircraft_swap_cost > 0 && (
-          <div className="flex justify-between p-2 bg-slate-50 rounded">
-            <span className="text-slate-600">Aircraft Swap</span>
-            <span className="font-medium text-slate-800">{formatCurrency(impact.aircraft_swap_cost, impact.currency)}</span>
-          </div>
-        )}
-        {impact.crew_costs > 0 && (
-          <div className="flex justify-between p-2 bg-slate-50 rounded">
-            <span className="text-slate-600">Crew Costs</span>
-            <span className="font-medium text-slate-800">{formatCurrency(impact.crew_costs, impact.currency)}</span>
-          </div>
-        )}
-        {impact.passenger_compensation > 0 && (
-          <div className="flex justify-between p-2 bg-slate-50 rounded">
-            <span className="text-slate-600">Passenger Comp.</span>
-            <span className="font-medium text-slate-800">{formatCurrency(impact.passenger_compensation, impact.currency)}</span>
-          </div>
-        )}
-        {impact.rebooking_costs && impact.rebooking_costs > 0 && (
-          <div className="flex justify-between p-2 bg-slate-50 rounded">
-            <span className="text-slate-600">Rebooking</span>
-            <span className="font-medium text-slate-800">{formatCurrency(impact.rebooking_costs, impact.currency)}</span>
-          </div>
-        )}
-        {impact.hotel_accommodation && impact.hotel_accommodation > 0 && (
-          <div className="flex justify-between p-2 bg-slate-50 rounded">
-            <span className="text-slate-600">Hotel</span>
-            <span className="font-medium text-slate-800">{formatCurrency(impact.hotel_accommodation, impact.currency)}</span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  // Fallback for unknown object format
+  return <div className="text-sm text-slate-600">{JSON.stringify(impact, null, 2)}</div>;
 };
 
 // Network Impact Detail Component
-const NetworkImpactDetail: React.FC<{ impact: NetworkImpact | string }> = ({ impact }) => {
-  if (!isNetworkImpact(impact)) {
-    return <div className="text-sm text-slate-600">{impact}</div>;
-  }
-
-  return (
-    <div className="space-y-2 text-sm">
-      <div className="flex items-center justify-between p-2 bg-purple-100 rounded-lg">
-        <span className="text-purple-900">Downstream Flights Affected</span>
-        <span className="text-lg font-bold text-purple-700">{impact.downstream_flights_affected}</span>
-      </div>
-      <div className="flex items-center gap-2 p-2 bg-slate-50 rounded">
-        {impact.rotation_preserved ? (
-          <>
-            <CheckCircle size={16} className="text-green-500" />
-            <span className="text-green-700 font-medium">Rotation Preserved</span>
-          </>
-        ) : (
-          <>
-            <XCircle size={16} className="text-red-500" />
-            <span className="text-red-700 font-medium">Rotation Not Preserved</span>
-          </>
-        )}
-      </div>
-      {impact.EY17_connection_protected !== undefined && (
+const NetworkImpactDetail: React.FC<{ impact: NetworkImpact | string | AlternativeNetworkImpact }> = ({ impact }) => {
+  // Handle standard NetworkImpact format
+  if (isNetworkImpact(impact)) {
+    return (
+      <div className="space-y-2 text-sm">
+        <div className="flex items-center justify-between p-2 bg-purple-100 rounded-lg">
+          <span className="text-purple-900">Downstream Flights Affected</span>
+          <span className="text-lg font-bold text-purple-700">{impact.downstream_flights_affected}</span>
+        </div>
         <div className="flex items-center gap-2 p-2 bg-slate-50 rounded">
-          {impact.EY17_connection_protected ? (
+          {impact.rotation_preserved ? (
             <>
               <CheckCircle size={16} className="text-green-500" />
-              <span className="text-green-700 font-medium">EY17 Connection Protected</span>
+              <span className="text-green-700 font-medium">Rotation Preserved</span>
             </>
           ) : (
             <>
               <XCircle size={16} className="text-red-500" />
-              <span className="text-red-700 font-medium">EY17 Connection At Risk</span>
+              <span className="text-red-700 font-medium">Rotation Not Preserved</span>
             </>
           )}
         </div>
-      )}
-      <div className="p-2 bg-slate-50 rounded">
-        <span className="text-slate-600">Propagation: </span>
-        <span className="font-medium text-slate-800">{impact.network_propagation}</span>
+        {impact.EY17_connection_protected !== undefined && (
+          <div className="flex items-center gap-2 p-2 bg-slate-50 rounded">
+            {impact.EY17_connection_protected ? (
+              <>
+                <CheckCircle size={16} className="text-green-500" />
+                <span className="text-green-700 font-medium">EY17 Connection Protected</span>
+              </>
+            ) : (
+              <>
+                <XCircle size={16} className="text-red-500" />
+                <span className="text-red-700 font-medium">EY17 Connection At Risk</span>
+              </>
+            )}
+          </div>
+        )}
+        <div className="p-2 bg-slate-50 rounded">
+          <span className="text-slate-600">Propagation: </span>
+          <span className="font-medium text-slate-800">{impact.network_propagation}</span>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  // Handle alternative format (downstream_flights + connection_misses)
+  if (isAlternativeNetworkImpact(impact)) {
+    return (
+      <div className="space-y-2 text-sm">
+        <div className="flex items-center justify-between p-2 bg-purple-100 rounded-lg">
+          <span className="text-purple-900">Downstream Flights</span>
+          <span className="text-lg font-bold text-purple-700">{impact.downstream_flights}</span>
+        </div>
+        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded">
+          {impact.connection_misses === 0 ? (
+            <>
+              <CheckCircle size={16} className="text-green-500" />
+              <span className="text-green-700 font-medium">No Connection Misses</span>
+            </>
+          ) : (
+            <>
+              <XCircle size={16} className="text-red-500" />
+              <span className="text-red-700 font-medium">{impact.connection_misses} Connection Misses</span>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Handle string format
+  if (typeof impact === 'string') {
+    return <div className="text-sm text-slate-600">{impact}</div>;
+  }
+
+  // Fallback for unknown object format
+  return <div className="text-sm text-slate-600">{JSON.stringify(impact, null, 2)}</div>;
 };
 
 // Expanded Solution View Modal
@@ -619,7 +793,7 @@ export const RecoveryPlanModal: React.FC<{
                     {/* Agent Badge */}
                     <div className={`${agentStyle.bg} ${agentStyle.text} px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1 flex-shrink-0`}>
                       <span>{agentStyle.icon}</span>
-                      {step.responsible_agent.replace('_', ' ').toUpperCase()}
+                      {agentStyle.label.toUpperCase()}
                     </div>
                   </div>
 
@@ -712,7 +886,7 @@ export const RecoveryPlanModal: React.FC<{
                             <div className="flex items-center gap-2 mt-2">
                               <span className="text-xs text-slate-500">Owner:</span>
                               <span className={`${agentStyle.bg} ${agentStyle.text} text-xs px-2 py-0.5 rounded-full`}>
-                                {agentStyle.icon} {contingency.responsible_agent.replace('_', ' ')}
+                                {agentStyle.icon} {agentStyle.label}
                               </span>
                             </div>
                           </div>
@@ -896,7 +1070,7 @@ export const RecoveryExecutionModal: React.FC<{
                     {style.icon}
                   </span>
                   <span className={`text-[9px] font-bold uppercase tracking-wider text-center ${style.text}`}>
-                    {agent.replace('_', ' ')}
+                    {style.label}
                   </span>
                   {status === 'done' && <CheckCircle size={14} className="text-emerald-500 mt-1" />}
                   {status === 'working' && <Activity size={14} className="text-sky-500 mt-1 animate-pulse" />}
@@ -953,7 +1127,7 @@ export const RecoveryExecutionModal: React.FC<{
                   <p className="text-sm text-slate-600 mt-1 line-clamp-2">{step.description}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs flex-wrap">
                     <span className={`${style.bg} ${style.text} px-2 py-0.5 rounded-full`}>
-                      {style.icon} {step.responsible_agent.replace('_', ' ')}
+                      {style.icon} {style.label}
                     </span>
                     <span className="text-slate-500 flex items-center gap-1">
                       <Clock size={12} /> {step.estimated_duration}

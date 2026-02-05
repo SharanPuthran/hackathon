@@ -13,6 +13,7 @@ export interface EnvironmentConfig {
     enableMock: boolean;
     mockFallbackTimeout: number; // Timeout in seconds before falling back to mock data
     useMockFallback: boolean; // Enable/disable mock fallback feature
+    mockSolutionFile: string; // Which solution file to use for mock data (e.g., 'solution_1', 'solution_2')
 }
 
 /**
@@ -68,6 +69,7 @@ export function validateConfig(config: Partial<EnvironmentConfig>): void {
  * - VITE_ENABLE_MOCK: Enable mock mode for testing (defaults to false)
  * - VITE_MOCK_FALLBACK_TIMEOUT: Timeout in seconds before falling back to mock data (defaults to 60)
  * - VITE_USE_MOCK_FALLBACK: Enable mock fallback feature (defaults to false)
+ * - VITE_MOCK_SOLUTION: Which solution file to use for mock data (defaults to 'solution_1')
  */
 export function loadConfig(): EnvironmentConfig {
     const timeoutSeconds = import.meta.env.VITE_API_TIMEOUT
@@ -86,6 +88,7 @@ export function loadConfig(): EnvironmentConfig {
         enableMock: import.meta.env.VITE_ENABLE_MOCK === 'true',
         mockFallbackTimeout: mockFallbackSeconds * 1000, // Convert to milliseconds
         useMockFallback: import.meta.env.VITE_USE_MOCK_FALLBACK === 'true',
+        mockSolutionFile: import.meta.env.VITE_MOCK_SOLUTION || 'solution_1',
     };
 
     // Validate configuration

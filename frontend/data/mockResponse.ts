@@ -6,9 +6,59 @@
  * 2. Mock mode is enabled via configuration
  *
  * The data structure mirrors the actual API response format.
+ *
+ * Configuration:
+ * - Set VITE_MOCK_SOLUTION environment variable to switch between solutions
+ * - Available solutions: solution_1, solution_2 (add more as needed)
  */
 
-export const MOCK_RESPONSE = {
+import { getConfig } from '../config/env';
+
+// Import solution JSON files
+import solution1 from './responses/solution_1.json';
+import solution2 from './responses/solution_2.json';
+
+// Define a flexible type for mock responses (allows different solution structures)
+type MockResponse = Record<string, unknown>;
+
+// Solution registry - add new solutions here
+const SOLUTIONS_REGISTRY: Record<string, MockResponse> = {
+  'solution_1': solution1,
+  'solution_2': solution2,
+};
+
+/**
+ * Get list of available solution keys
+ */
+export const getAvailableSolutions = (): string[] => Object.keys(SOLUTIONS_REGISTRY);
+
+/**
+ * Get the currently selected mock solution based on configuration
+ */
+const getSelectedSolution = (): MockResponse => {
+  const config = getConfig();
+  const solutionKey = config.mockSolutionFile || 'solution_1';
+
+  if (!(solutionKey in SOLUTIONS_REGISTRY)) {
+    console.warn(`Mock solution "${solutionKey}" not found, falling back to solution_1`);
+    return SOLUTIONS_REGISTRY['solution_1'];
+  }
+
+  return SOLUTIONS_REGISTRY[solutionKey];
+};
+
+/**
+ * The currently selected mock response
+ * Note: This is evaluated when the module is imported, so changes to VITE_MOCK_SOLUTION
+ * require a page refresh or dev server restart to take effect.
+ */
+export const MOCK_RESPONSE = getSelectedSolution();
+
+/**
+ * Legacy inline mock data (kept for reference/fallback)
+ * To use static data instead of JSON files, uncomment this and comment out the above
+ */
+export const MOCK_RESPONSE_STATIC = {
   "status": "success",
   "thread_id": "042ed3eb-1e18-4f44-93df-251b5dd7d77a",
   "final_decision": {
@@ -91,8 +141,8 @@ export const MOCK_RESPONSE = {
         "estimated_duration": "2 hours",
         "recovery_plan": {
           "solution_id": 1,
-          "total_steps": 8,
-          "estimated_total_duration": "2 hours",
+          "total_steps": 9,
+          "estimated_total_duration": "2.5 hours",
           "steps": [
             {
               "step_number": 1,
@@ -115,7 +165,7 @@ export const MOCK_RESPONSE = {
               "step_number": 2,
               "step_name": "Position Replacement Aircraft",
               "description": "Ferry or reposition replacement aircraft to BKK if not already on station",
-              "responsible_agent": "network",
+              "responsible_agent": "flight_scheduling",
               "dependencies": [1],
               "estimated_duration": "30 minutes",
               "automation_possible": false,
@@ -164,6 +214,26 @@ export const MOCK_RESPONSE = {
             },
             {
               "step_number": 5,
+              "step_name": "Transfer Cargo to Replacement Aircraft",
+              "description": "Transfer 12.4 tonnes of cargo from A6-BNC to replacement aircraft, prioritizing cold chain shipments (pharmaceuticals, perishables) and maintaining temperature integrity",
+              "responsible_agent": "cargo_recovery",
+              "dependencies": [2],
+              "estimated_duration": "45 minutes",
+              "automation_possible": false,
+              "action_type": "coordinate",
+              "parameters": {
+                "total_cargo_kg": 12400,
+                "shipment_count": 14,
+                "perishable_tonnes": 2.1,
+                "pharmaceutical_tonnes": 1.8,
+                "cold_chain_required": true,
+                "priority_loading": ["pharmaceuticals", "perishables", "live_animals", "high_value", "general"]
+              },
+              "success_criteria": "All 14 shipments transferred, cold chain integrity verified, weight & balance confirmed",
+              "rollback_procedure": "If transfer incomplete, prioritize cold chain cargo and offload non-critical general cargo"
+            },
+            {
+              "step_number": 6,
               "step_name": "Ground A6-BNC for Maintenance",
               "description": "Ground A6-BNC, initiate maintenance inspection and MEL compliance review",
               "responsible_agent": "maintenance",
@@ -180,10 +250,10 @@ export const MOCK_RESPONSE = {
               "rollback_procedure": null
             },
             {
-              "step_number": 6,
+              "step_number": 7,
               "step_name": "Coordinate Gate Operations",
               "description": "Coordinate with BKK ground operations for gate assignment and aircraft positioning",
-              "responsible_agent": "network",
+              "responsible_agent": "flight_scheduling",
               "dependencies": [2],
               "estimated_duration": "20 minutes",
               "automation_possible": false,
@@ -197,11 +267,11 @@ export const MOCK_RESPONSE = {
               "rollback_procedure": null
             },
             {
-              "step_number": 7,
+              "step_number": 8,
               "step_name": "Priority Boarding for Connections",
               "description": "Implement priority boarding for 51 connecting passengers to ensure EY17 connections",
               "responsible_agent": "guest_experience",
-              "dependencies": [4, 6],
+              "dependencies": [4, 7],
               "estimated_duration": "30 minutes",
               "automation_possible": true,
               "action_type": "coordinate",
@@ -214,11 +284,11 @@ export const MOCK_RESPONSE = {
               "rollback_procedure": null
             },
             {
-              "step_number": 8,
+              "step_number": 9,
               "step_name": "Depart on Schedule",
               "description": "Complete boarding, close doors, and depart at scheduled 01:00 UTC",
               "responsible_agent": "crew_compliance",
-              "dependencies": [3, 7],
+              "dependencies": [3, 5, 8],
               "estimated_duration": "15 minutes",
               "automation_possible": false,
               "action_type": "coordinate",
@@ -230,7 +300,7 @@ export const MOCK_RESPONSE = {
               "rollback_procedure": null
             }
           ],
-          "critical_path": [1, 2, 6, 7, 8],
+          "critical_path": [1, 2, 5, 7, 8, 9],
           "contingency_plans": [
             {
               "trigger": "No replacement aircraft available within 2 hours",

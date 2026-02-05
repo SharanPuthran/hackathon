@@ -159,7 +159,7 @@ See Also
 """
 
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 from datetime import datetime
 
@@ -2162,14 +2162,25 @@ class ArbitratorOutput(BaseModel):
         description="Arbitration duration in seconds"
     )
     
-    # NEW: Multiple solution options (arbitrator-multi-solution-enhancements)
+    # Multiple solution options - REQUIRED for successful arbitration
     solution_options: Optional[List[RecoverySolution]] = Field(
         default=None,
-        description="1-3 ranked recovery solution options (None for backward compatibility)"
+        description=(
+            "REQUIRED: 1-3 ranked recovery solution options. Each solution must include "
+            "title, description, recommendations, safety_compliance, impact assessments "
+            "(passenger, financial, network), multi-dimensional scores (safety, cost, "
+            "passenger, network, composite), pros/cons/risks, confidence, estimated_duration, "
+            "and a detailed recovery_plan with steps. This field should ONLY be None in "
+            "error scenarios where arbitration completely failed."
+        )
     )
     recommended_solution_id: Optional[int] = Field(
         default=None,
-        description="ID of the recommended solution (1, 2, or 3)"
+        description=(
+            "REQUIRED: ID of the recommended solution (1, 2, or 3). Must reference a valid "
+            "solution_id from solution_options. Should ONLY be None in error scenarios. "
+            "The system will use this to identify the best solution for execution."
+        )
     )
     
     # NEW: Phase evolution analysis (arbitrator-dual-phase-input)
@@ -2337,10 +2348,33 @@ class ArbitratorOutput(BaseModel):
                 f"Recommended solution ID {v} not found in solution options. "
                 f"Valid IDs: {valid_ids}"
             )
-        
+
         return v
 
+    @model_validator(mode='after')
+    def validate_solutions_generated(self) -> 'ArbitratorOutput':
+        """
+        Log warning when confidence > 0 but no solutions generated.
 
+        This helps identify cases where the LLM should have generated solutions
+        but failed to do so, without breaking the validation flow.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # If this is an error scenario (confidence 0), allow None
+        if self.confidence == 0.0:
+            return self
+
+        # For successful arbitration, solutions should be generated
+        if not self.solution_options or len(self.solution_options) == 0:
+            logger.warning(
+                "ArbitratorOutput has confidence > 0 but no solution_options. "
+                "This indicates the LLM failed to generate solutions. "
+                f"Confidence: {self.confidence}, Final Decision: {self.final_decision[:100]}..."
+            )
+
+        return self
 
 
 

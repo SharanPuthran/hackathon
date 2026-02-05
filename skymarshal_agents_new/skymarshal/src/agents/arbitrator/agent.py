@@ -60,7 +60,7 @@ HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20250929-v1:0"
 NOVA_PREMIER_MODEL_ID = "us.amazon.nova-premier-v1:0"
 NOVA_PRO_MODEL_ID = "us.amazon.nova-pro-v1:0"
 
-# Arbitrator model priority (will try in order)
+# Arbitrator model priority (will try in order) - Opus 4.5 primary, Sonnet 4.5 fallback only
 ARBITRATOR_MODEL_PRIORITY = [
     {
         "id": OPUS_MODEL_ID,
@@ -73,29 +73,8 @@ ARBITRATOR_MODEL_PRIORITY = [
         "id": SONNET_MODEL_ID,
         "name": "Claude Sonnet 4.5",
         "temperature": 0.1,
-        "max_tokens": 8192,
-        "reason": "Excellent reasoning with good performance"
-    },
-    {
-        "id": HAIKU_MODEL_ID,
-        "name": "Claude Haiku 4.5",
-        "temperature": 0.1,
-        "max_tokens": 8192,
-        "reason": "Fast and cost-effective with solid reasoning"
-    },
-    {
-        "id": NOVA_PREMIER_MODEL_ID,
-        "name": "Amazon Nova Premier",
-        "temperature": 0.1,
-        "max_tokens": 8192,
-        "reason": "Amazon's flagship model, no throttling limits"
-    },
-    {
-        "id": NOVA_PRO_MODEL_ID,
-        "name": "Amazon Nova Pro",
-        "temperature": 0.1,
-        "max_tokens": 8192,
-        "reason": "Cost-effective Amazon model with good performance"
+        "max_tokens": 12000,  # Increased for complex schema
+        "reason": "Excellent reasoning fallback"
     }
 ]
 
@@ -110,7 +89,149 @@ _arbitrator_tested_models = {}
 # Compact phase evolution - single line for agent parsing
 PHASE_EVOLUTION_INSTRUCTIONS = """<evolution>converge=weight_high|diverge=investigate|stable=high_conf</evolution>"""
 
-# Minimal system prompt - agent-parseable, no human formatting
+# Solution structure guidance for the LLM - explains the complex nested schema
+SOLUTION_STRUCTURE_GUIDANCE = """
+<SOLUTION_GENERATION>
+MANDATORY: You MUST generate 1-3 RecoverySolution objects in the solution_options array.
+This is NON-NEGOTIABLE. Every arbitration MUST produce at least one solution.
+
+<solution_schema>
+Each solution MUST include ALL of these fields:
+- solution_id: int (1, 2, or 3) - unique ID for this solution
+- title: str - short descriptive title (max 50 chars)
+- description: str - detailed description of the approach
+- recommendations: List[str] - 3-5 specific action steps
+- safety_compliance: str - how this satisfies safety constraints
+- passenger_impact: Dict with keys: affected_count (int), delay_hours (float), cancellation_flag (bool)
+- financial_impact: Dict with keys: total_cost (int), breakdown (Dict)
+- network_impact: Dict with keys: downstream_flights (int), connection_misses (int)
+- safety_score: float 0-100 (higher = safer)
+- cost_score: float 0-100 (higher = lower cost)
+- passenger_score: float 0-100 (higher = less impact)
+- network_score: float 0-100 (higher = less propagation)
+- composite_score: float (calculated: safety*0.4 + cost*0.2 + pax*0.2 + network*0.2)
+- pros: List[str] - 2-3 advantages
+- cons: List[str] - 2-3 disadvantages
+- risks: List[str] - 2-3 potential risks
+- confidence: float 0.0-1.0
+- estimated_duration: str (e.g., "4 hours", "6 hours")
+- recovery_plan: RecoveryPlan object (see below)
+</solution_schema>
+
+<recovery_plan_schema>
+recovery_plan MUST include:
+- solution_id: int (must match parent solution_id)
+- total_steps: int (count of steps)
+- estimated_total_duration: str
+- steps: List[RecoveryStep] - at least 2 steps
+- critical_path: List[int] - step numbers on critical path
+- contingency_plans: List[Dict] - can be empty []
+</recovery_plan_schema>
+
+<recovery_step_schema>
+Each step MUST include:
+- step_number: int (sequential starting from 1)
+- step_name: str - short name
+- description: str - what this step accomplishes
+- responsible_agent: str - who executes (e.g., "crew_scheduling", "ops_control", "guest_services")
+- dependencies: List[int] - step numbers this depends on ([] for first step)
+- estimated_duration: str (e.g., "15 minutes", "1 hour")
+- automation_possible: bool
+- action_type: str (notify, rebook, schedule, coordinate, review)
+- parameters: Dict - can be {}
+- success_criteria: str - how to verify completion
+- rollback_procedure: Optional[str] - can be null
+</recovery_step_schema>
+</SOLUTION_GENERATION>
+"""
+
+# Complete solution example for the LLM to follow
+SOLUTION_EXAMPLE = """
+<SOLUTION_EXAMPLE>
+Example solution_options for a crew FDP violation scenario:
+
+{
+  "solution_options": [
+    {
+      "solution_id": 1,
+      "title": "Delay with Crew Change",
+      "description": "Delay flight 2 hours while replacement crew positions from standby",
+      "recommendations": [
+        "Activate standby Captain from AUH base",
+        "Delay departure by 2 hours",
+        "Notify passengers of delay",
+        "Arrange meal vouchers for affected passengers"
+      ],
+      "safety_compliance": "Fully satisfies FDP limits with 3-hour margin for replacement crew",
+      "passenger_impact": {"affected_count": 280, "delay_hours": 2.0, "cancellation_flag": false},
+      "financial_impact": {"total_cost": 85000, "breakdown": {"crew_positioning": 15000, "compensation": 70000}},
+      "network_impact": {"downstream_flights": 1, "connection_misses": 12},
+      "safety_score": 95.0,
+      "cost_score": 65.0,
+      "passenger_score": 60.0,
+      "network_score": 75.0,
+      "composite_score": 76.0,
+      "pros": ["Maintains safety compliance", "Minimal network impact", "Flight operates"],
+      "cons": ["2-hour delay", "Passenger compensation required"],
+      "risks": ["Standby crew may have traffic delays", "Weather could worsen"],
+      "confidence": 0.85,
+      "estimated_duration": "2.5 hours",
+      "recovery_plan": {
+        "solution_id": 1,
+        "total_steps": 3,
+        "estimated_total_duration": "2.5 hours",
+        "steps": [
+          {
+            "step_number": 1,
+            "step_name": "Activate Standby Crew",
+            "description": "Contact and confirm standby Captain availability",
+            "responsible_agent": "crew_scheduling",
+            "dependencies": [],
+            "estimated_duration": "15 minutes",
+            "automation_possible": true,
+            "action_type": "coordinate",
+            "parameters": {"crew_type": "Captain", "base": "AUH"},
+            "success_criteria": "Standby crew confirmed and en route",
+            "rollback_procedure": "Escalate to reserve crew list"
+          },
+          {
+            "step_number": 2,
+            "step_name": "Notify Passengers",
+            "description": "Send delay notification via SMS and app",
+            "responsible_agent": "guest_services",
+            "dependencies": [1],
+            "estimated_duration": "10 minutes",
+            "automation_possible": true,
+            "action_type": "notify",
+            "parameters": {"channel": "sms,app", "delay_hours": 2},
+            "success_criteria": "Notifications sent to all passengers",
+            "rollback_procedure": null
+          },
+          {
+            "step_number": 3,
+            "step_name": "Confirm Crew Arrival",
+            "description": "Verify replacement crew arrived and ready",
+            "responsible_agent": "ops_control",
+            "dependencies": [1],
+            "estimated_duration": "90 minutes",
+            "automation_possible": false,
+            "action_type": "review",
+            "parameters": {},
+            "success_criteria": "Crew checked in and briefed",
+            "rollback_procedure": "Activate second standby or consider cancellation"
+          }
+        ],
+        "critical_path": [1, 3],
+        "contingency_plans": [{"trigger": "Standby unavailable", "action": "Escalate to home reserve list"}]
+      }
+    }
+  ],
+  "recommended_solution_id": 1
+}
+</SOLUTION_EXAMPLE>
+"""
+
+# System prompt for Arbitrator - includes critical requirement for solution generation
 ARBITRATOR_SYSTEM_PROMPT = """<role>arbitrator</role>
 
 <DATA_POLICY>
@@ -119,13 +240,97 @@ NEVER: assume|fabricate|use_LLM_knowledge|external_lookup|guess_missing_data
 ON_DATA_GAP: report_error|request_clarification
 </DATA_POLICY>
 
-<rules>P1:Safety>Business=ALWAYS|P2:Safety>Safety=CONSERVATIVE|P3:Business=Pareto</rules>
+<rules>
+P1: Safety > Business = ALWAYS choose safety
+P2: Safety vs Safety = Choose MOST CONSERVATIVE option
+P3: Business vs Business = Pareto optimization (balance tradeoffs)
+</rules>
+
 <weights>safety:40|cost:20|pax:20|network:20</weights>
-<conf>0.9-1:agree|0.7-0.9:minor|0.5-0.7:conflicts|<0.5:ESCALATE</conf>
-<out>final_decision,recommendations[],conflicts[],resolutions[],solutions[1-3],recommended_id</out>
+
+<confidence_scoring>
+0.9-1.0: All agents agree, no conflicts
+0.7-0.9: Minor conflicts resolved
+0.5-0.7: Significant conflicts, safety clear
+less than 0.5: ESCALATE to human
+</confidence_scoring>
+
+<CRITICAL_REQUIREMENT>
+YOU MUST GENERATE solution_options WITH 1-3 RecoverySolution OBJECTS.
+YOU MUST SET recommended_solution_id TO THE BEST SOLUTION'S ID (1, 2, or 3).
+FAILURE TO GENERATE SOLUTIONS IS NOT ACCEPTABLE - THIS IS MANDATORY.
+DO NOT RETURN null OR EMPTY FOR solution_options.
+</CRITICAL_REQUIREMENT>
+
+""" + SOLUTION_STRUCTURE_GUIDANCE + SOLUTION_EXAMPLE + """
+
 <style>concise|active_voice|direct|actionable</style>
 <kb id="UDONMVCXEW"/>
 """ + PHASE_EVOLUTION_INSTRUCTIONS
+
+# Simplified prompt for retry attempts - focuses on core solution generation
+SIMPLIFIED_SOLUTION_PROMPT = """
+You MUST generate a recovery solution for this airline disruption.
+
+Based on the agent recommendations and constraints provided, create ONE complete solution with ALL of these fields:
+
+REQUIRED FIELDS:
+- solution_id: 1
+- title: Brief descriptive title (max 50 chars)
+- description: Detailed description of what to do
+- recommendations: List of 3-5 specific action steps
+- safety_compliance: How this satisfies safety constraints
+- passenger_impact: {"affected_count": <int>, "delay_hours": <float>, "cancellation_flag": <bool>}
+- financial_impact: {"total_cost": <int>, "breakdown": {}}
+- network_impact: {"downstream_flights": <int>, "connection_misses": <int>}
+- safety_score: 0-100 (higher = safer)
+- cost_score: 0-100 (higher = lower cost)
+- passenger_score: 0-100 (higher = less impact)
+- network_score: 0-100 (higher = less propagation)
+- composite_score: Calculate as (safety_score*0.4 + cost_score*0.2 + passenger_score*0.2 + network_score*0.2)
+- pros: List of 2-3 advantages
+- cons: List of 2-3 disadvantages
+- risks: List of 2-3 potential risks
+- confidence: 0.0-1.0
+- estimated_duration: e.g., "4 hours"
+- recovery_plan: {
+    "solution_id": 1,
+    "total_steps": 2,
+    "estimated_total_duration": "<duration>",
+    "steps": [
+      {
+        "step_number": 1,
+        "step_name": "<name>",
+        "description": "<what this step does>",
+        "responsible_agent": "<who executes>",
+        "dependencies": [],
+        "estimated_duration": "<duration>",
+        "automation_possible": <bool>,
+        "action_type": "coordinate",
+        "parameters": {},
+        "success_criteria": "<how to verify>",
+        "rollback_procedure": null
+      },
+      {
+        "step_number": 2,
+        "step_name": "<name>",
+        "description": "<what this step does>",
+        "responsible_agent": "<who executes>",
+        "dependencies": [1],
+        "estimated_duration": "<duration>",
+        "automation_possible": <bool>,
+        "action_type": "notify",
+        "parameters": {},
+        "success_criteria": "<how to verify>",
+        "rollback_procedure": null
+      }
+    ],
+    "critical_path": [1, 2],
+    "contingency_plans": []
+  }
+
+CRITICAL: You MUST provide a complete, valid solution. Do not return null or empty for any field.
+"""
 
 
 # ============================================================================
@@ -990,6 +1195,98 @@ def _populate_backward_compatible_fields(output: ArbitratorOutput) -> Arbitrator
     return output
 
 
+def _generate_minimal_solution(
+    binding_constraints: List[Dict[str, Any]],
+    responses_dict: Dict[str, Any]
+) -> RecoverySolution:
+    """
+    Generate a minimal conservative solution when LLM fails to produce solutions.
+
+    This ensures downstream systems always receive at least one actionable solution,
+    even if it's a conservative "satisfy all constraints" approach.
+
+    Args:
+        binding_constraints: All extracted binding constraints
+        responses_dict: All agent responses
+
+    Returns:
+        RecoverySolution with conservative recommendations
+    """
+    # Build recommendations from binding constraints
+    recommendations = []
+    for bc in (binding_constraints or [])[:5]:  # Max 5 constraints
+        constraint_text = bc.get('constraint', 'Unknown constraint')
+        agent_name = bc.get('agent', 'Unknown agent')
+        recommendations.append(f"Satisfy {agent_name} constraint: {constraint_text}")
+
+    if not recommendations:
+        recommendations = [
+            "Manual review required by duty manager",
+            "Verify all safety constraints are satisfied",
+            "Choose most conservative operational option"
+        ]
+
+    # Create minimal recovery plan with two steps
+    step1 = RecoveryStep(
+        step_number=1,
+        step_name="Review Constraints",
+        description="Manual review of all binding constraints and agent recommendations",
+        responsible_agent="duty_manager",
+        dependencies=[],
+        estimated_duration="30 minutes",
+        automation_possible=False,
+        action_type="review",
+        parameters={},
+        success_criteria="All constraints understood and verified",
+        rollback_procedure=None
+    )
+
+    step2 = RecoveryStep(
+        step_number=2,
+        step_name="Execute Conservative Plan",
+        description="Execute conservative approach satisfying all safety constraints",
+        responsible_agent="ops_control",
+        dependencies=[1],
+        estimated_duration="1 hour",
+        automation_possible=False,
+        action_type="coordinate",
+        parameters={},
+        success_criteria="All binding constraints verified as satisfied",
+        rollback_procedure="Escalate to senior duty manager"
+    )
+
+    recovery_plan = RecoveryPlan(
+        solution_id=1,
+        total_steps=2,
+        estimated_total_duration="1.5 hours",
+        steps=[step1, step2],
+        critical_path=[1, 2],
+        contingency_plans=[]
+    )
+
+    return RecoverySolution(
+        solution_id=1,
+        title="Conservative Safety-First Approach",
+        description="Fallback solution generated when automated analysis could not produce custom solutions. This conservative approach prioritizes satisfying all safety binding constraints through manual review.",
+        recommendations=recommendations,
+        safety_compliance="Prioritizes satisfying all mandatory binding constraints from safety agents",
+        passenger_impact={"affected_count": 0, "delay_hours": 0.0, "cancellation_flag": False},
+        financial_impact={"total_cost": 0, "breakdown": {}},
+        network_impact={"downstream_flights": 0, "connection_misses": 0},
+        safety_score=100.0,  # Maximum safety (conservative approach)
+        cost_score=50.0,     # Unknown cost
+        passenger_score=50.0, # Unknown impact
+        network_score=50.0,  # Unknown propagation
+        composite_score=70.0, # Weighted: 100*0.4 + 50*0.2 + 50*0.2 + 50*0.2 = 70
+        pros=["Ensures safety compliance", "Satisfies all binding constraints", "Conservative approach minimizes risk"],
+        cons=["May not be optimal for business", "Requires manual review", "Potential delays"],
+        risks=["Delay in decision-making", "Potential for suboptimal outcome", "Manual errors possible"],
+        confidence=0.5,  # Medium confidence for fallback
+        estimated_duration="1.5 hours (requires assessment)",
+        recovery_plan=recovery_plan
+    )
+
+
 # ============================================================================
 # Main Arbitration Function
 # ============================================================================
@@ -1262,7 +1559,16 @@ BINDING_CONSTRAINTS:{bc_str}
 
 {operational_context if operational_context else ""}
 
-TASK:resolve_conflicts|classify|apply_rules|satisfy_bc|generate_solutions[1-3]|recommend_best
+TASK - Complete ALL of the following steps:
+1. Identify and resolve all conflicts between agent recommendations
+2. Classify each conflict (safety_vs_business, safety_vs_safety, business_vs_business)
+3. Apply priority rules (P1: Safety > Business, P2: Conservative for Safety conflicts, P3: Pareto for Business)
+4. Ensure ALL binding constraints (especially MANDATORY ones) are satisfied
+5. GENERATE 1-3 RECOVERY SOLUTIONS in solution_options array - THIS IS MANDATORY, DO NOT SKIP
+6. Set recommended_solution_id to the ID (1, 2, or 3) of the best solution
+
+CRITICAL: solution_options MUST NOT be null or empty. You MUST generate at least ONE complete RecoverySolution with all required fields including recovery_plan.
+
 {"EVOLUTION_WEIGHT:converge=high|diverge=investigate|stable=confident" if phase_comparison else ""}"""
     
     try:
@@ -1293,19 +1599,24 @@ TASK:resolve_conflicts|classify|apply_rules|satisfy_bc|generate_solutions[1-3]|r
             logger.info("Added recommendation evolution to output")
         
         # CRITICAL: Validate that solution_options were generated
-        # If LLM failed to generate solutions, log warning but allow fallback to handle it
+        # If LLM failed to generate solutions, generate fallback to ensure downstream systems work
         solution_count = len(result.get('solution_options', [])) if result.get('solution_options') else 0
         if solution_count == 0:
             logger.warning(
                 "Arbitrator returned no solution options. "
-                "This may indicate the LLM was unable to create recovery scenarios. "
-                "Returning result with explicit indication of no solutions."
+                "Generating fallback solution to ensure downstream systems have actionable data."
             )
-            # Update result to indicate no solutions were generated
-            result["solution_options"] = None
-            result["recommended_solution_id"] = None
-            if "error" not in result:
-                result["error"] = "No valid solution options could be generated by the arbitrator"
+            # Generate minimal fallback solution instead of returning None
+            fallback_solution = _generate_minimal_solution(binding_constraints, responses_dict)
+            result["solution_options"] = [fallback_solution.model_dump()]
+            result["recommended_solution_id"] = 1
+            result["fallback_used"] = True
+            result["warning"] = (
+                "Arbitrator could not generate custom solutions. "
+                "A conservative fallback solution has been provided. "
+                "Manual review recommended."
+            )
+            solution_count = 1  # Update count for logging
         
         # Log completion
         logger.info(
@@ -1319,90 +1630,57 @@ TASK:resolve_conflicts|classify|apply_rules|satisfy_bc|generate_solutions[1-3]|r
         return result
         
     except Exception as e:
-        logger.error(f"Arbitration failed: {e}", exc_info=True)
-        
-        # Return conservative fallback decision with single solution
-        fallback_solution = {
-            "solution_id": 1,
-            "title": "Conservative Manual Review Required",
-            "description": "System error during arbitration. Manual review and conservative approach recommended.",
-            "recommendations": [
-                "Manual review required",
-                "Satisfy all safety agent binding constraints",
-                "Choose most conservative option"
-            ],
-            "safety_compliance": "All binding constraints must be manually verified",
-            "passenger_impact": {"affected_count": 0, "delay_hours": 0, "cancellation_flag": False},
-            "financial_impact": {"total_cost": 0, "breakdown": {}},
-            "network_impact": {"downstream_flights": 0, "connection_misses": 0},
-            "safety_score": 100.0,
-            "cost_score": 0.0,
-            "passenger_score": 0.0,
-            "network_score": 0.0,
-            "composite_score": 40.0,  # 100 * 0.4 (safety only)
-            "pros": ["Ensures safety compliance"],
-            "cons": ["Requires manual intervention", "No automated recovery"],
-            "risks": ["Delay in decision making"],
-            "confidence": 0.0,
-            "estimated_duration": "Unknown",
-            "recovery_plan": {
-                "solution_id": 1,
-                "total_steps": 1,
-                "estimated_total_duration": "Unknown",
-                "steps": [{
-                    "step_number": 1,
-                    "step_name": "Manual Review",
-                    "description": "Conduct manual review of all agent responses and binding constraints",
-                    "responsible_agent": "duty_manager",
-                    "dependencies": [],
-                    "estimated_duration": "30 minutes",
-                    "automation_possible": False,
-                    "action_type": "review",
-                    "parameters": {},
-                    "success_criteria": "Decision made by duty manager",
-                    "rollback_procedure": None
-                }],
-                "critical_path": [1],
-                "contingency_plans": []
-            }
-        }
-        
-        return {
-            "final_decision": (
-                "ARBITRATION FAILED: Unable to generate valid recovery solutions. "
-                "The system could not create recovery scenarios that satisfy all constraints. "
-                "Manual review by duty manager is required to assess the situation and determine appropriate action."
-            ),
-            "recommendations": [
-                "IMMEDIATE ACTION: Manual review required by duty manager",
-                "Verify all safety agent binding constraints are understood",
-                "Assess if constraints are conflicting or if additional data is needed",
-                "Consider consulting with subject matter experts (crew scheduling, maintenance, regulatory)",
-                "Document the reason for arbitration failure for system improvement"
-            ],
-            "conflicts_identified": [],
-            "conflict_resolutions": [],
-            "safety_overrides": [],
-            "justification": (
-                f"Arbitration system error: {str(e)}. "
-                "The arbitrator was unable to generate valid solution options. "
-                "This may indicate conflicting binding constraints, insufficient data from agents, "
-                "or a system error in the LLM generation process. "
-                "No automated solutions can be provided - manual intervention is required."
-            ),
-            "reasoning": (
-                "Fallback to manual review due to arbitration failure. "
-                "The system cannot provide automated recovery solutions when the arbitrator "
-                "fails to generate valid options. This is a conservative safety measure to ensure "
-                "human oversight when automated decision-making is not possible."
-            ),
-            "confidence": 0.0,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "model_used": model_used or "none",
-            "duration_seconds": (datetime.now(timezone.utc) - start_time).total_seconds(),
-            "knowledge_base": kb_metadata,
-            "knowledgeBaseConsidered": kb_metadata.get('knowledge_base_queried', False) and kb_metadata.get('documents_found', 0) > 0,
-            "solution_options": None,  # Explicitly None - no solutions generated
-            "recommended_solution_id": None,  # No recommendation possible
-            "error": f"Arbitration failed: {str(e)}. No valid solution options could be generated."
-        }
+        logger.warning(f"First arbitration attempt failed: {e}. Retrying with simplified prompt...")
+
+        # Retry with simplified prompt that focuses on core solution generation
+        try:
+            simplified_retry_prompt = f"""
+{SIMPLIFIED_SOLUTION_PROMPT}
+
+CONTEXT FROM AGENTS:
+{formatted_responses}
+
+BINDING CONSTRAINTS:
+{bc_str}
+
+Based on the above context, generate ONE complete RecoverySolution that addresses this disruption.
+You MUST provide all required fields. Do not return null or empty values.
+"""
+
+            # Use the same structured LLM for retry
+            logger.info("Retrying arbitration with simplified prompt...")
+            retry_decision = structured_llm.invoke([
+                {"role": "system", "content": "You are an airline disruption arbitrator. You MUST generate a valid recovery solution. Do not return null or empty for solution_options."},
+                {"role": "user", "content": simplified_retry_prompt}
+            ])
+
+            # Populate backward-compatible fields
+            retry_decision = _populate_backward_compatible_fields(retry_decision)
+
+            # Convert to dict and add metadata
+            result = retry_decision.model_dump()
+            result["timestamp"] = datetime.now(timezone.utc).isoformat()
+            result["model_used"] = model_used
+            result["duration_seconds"] = (datetime.now(timezone.utc) - start_time).total_seconds()
+            result["knowledge_base"] = kb_metadata
+            result["knowledgeBaseConsidered"] = kb_metadata.get('knowledge_base_queried', False) and kb_metadata.get('documents_found', 0) > 0
+            result["phases_considered"] = phases_considered
+            result["retry_used"] = True
+            result["original_error"] = str(e)
+
+            # Validate retry generated solutions
+            solution_count = len(result.get('solution_options', [])) if result.get('solution_options') else 0
+            if solution_count > 0:
+                logger.info(f"Retry successful - {solution_count} solution(s) generated")
+                return result
+            else:
+                logger.error("Retry also failed to generate solutions")
+                raise RuntimeError("Retry failed to generate solution_options")
+
+        except Exception as retry_error:
+            logger.error(f"Retry also failed: {retry_error}", exc_info=True)
+            # Both attempts failed - raise error (no fallback placeholders)
+            raise RuntimeError(
+                f"Arbitration failed after retry. Original error: {e}. Retry error: {retry_error}. "
+                "Unable to generate valid recovery solutions."
+            ) from retry_error
