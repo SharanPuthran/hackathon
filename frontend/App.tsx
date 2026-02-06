@@ -4,6 +4,8 @@ import OrchestrationView from "./components/OrchestrationView";
 import { Background } from "./components/Background";
 import { useAPI } from "./hooks/useAPI";
 import { StatusResponse } from "./services/apiAsync";
+// Import mock solution switcher to make it available in console
+import "./utils/mockSolutionSwitcher";
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<"landing" | "orchestration">(

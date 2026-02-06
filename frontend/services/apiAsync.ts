@@ -153,7 +153,7 @@ export class AsyncAPIService {
             if (onProgress) {
                 onProgress(0, 'mock');
             }
-            return getMockStatusResponse();
+            return await getMockStatusResponse();
         }
 
         // Step 1: Start async processing
@@ -182,7 +182,7 @@ export class AsyncAPIService {
                 }
 
                 // Return mock data
-                const mockResponse = getMockStatusResponse();
+                const mockResponse = await getMockStatusResponse();
                 mockResponse.request_id = asyncResponse.request_id; // Keep original request_id for tracking
                 return mockResponse;
             }
