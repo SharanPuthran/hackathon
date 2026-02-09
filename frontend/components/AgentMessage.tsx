@@ -435,7 +435,7 @@ export const AgentMessage: React.FC<AgentMessageProps> = ({
                 className="text-emerald-500 flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity"
               />
               <span className="font-semibold text-emerald-700 text-xs uppercase tracking-wide opacity-80">
-                Recommendation
+                Initial Analysis
               </span>
             </div>
             <div className="text-slate-700">
@@ -444,23 +444,6 @@ export const AgentMessage: React.FC<AgentMessageProps> = ({
           </div>
         )}
 
-        {/* NEW: Display reasoning field with markdown rendering */}
-        {message.reasoning && (
-          <div className="group p-3 rounded-lg bg-blue-50/50 border border-blue-100/50 hover:bg-blue-50 transition-colors mb-3">
-            <div className="flex gap-2 items-center mb-2">
-              <BrainCircuit
-                size={16}
-                className="text-blue-500 flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity"
-              />
-              <span className="font-semibold text-blue-700 text-xs uppercase tracking-wide opacity-80">
-                Reasoning
-              </span>
-            </div>
-            <div className="text-slate-700">
-              <MarkdownContent content={message.reasoning} />
-            </div>
-          </div>
-        )}
 
         {/* NEW: Display data_sources field */}
         {message.data_sources && message.data_sources.length > 0 && (
